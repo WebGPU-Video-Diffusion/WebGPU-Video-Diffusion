@@ -1,7 +1,7 @@
 # WebGPU-Accelerated Video Diffusion Model  
 ### CIS 5650: Final Project  
 **Contributors:**  
-[@Yuntian Ke](https://github.com/) · [@Ruichi Zhang](https://github.com/) · [@Muqiao Lei](https://github.com/) · [@Lobi Zhao](https://github.com/)
+[@Yuntian Ke](https://github.com/kytttt) · [@Ruichi Zhang](https://github.com/Pabloo0610) · [@Muqiao Lei](https://github.com/rmurdock41) · [@Lobi Zhao](https://github.com/lobizhao)
 
 ---
 
