@@ -1,65 +1,97 @@
 # WebGPU-Accelerated Video Diffusion Model  
-*CIS 5650: Final Project*
-### Contributors:
-@Yuntian Ke @Ruichi Zhang @Muqiao Lei @Lobi Zhao
+### CIS 5650: Final Project  
+**Contributors:**  
+[@Yuntian Ke](https://github.com/) · [@Ruichi Zhang](https://github.com/) · [@Muqiao Lei](https://github.com/) · [@Lobi Zhao](https://github.com/)
 
+---
+
+## 📘 Project Scope and Contributions
 [![WebGPU](https://img.shields.io/badge/WebGPU-Enabled-blue)](https://developer.mozilla.org/en-US/docs/Web/API/WebGPU_API)
 [![ONNX Runtime](https://img.shields.io/badge/ONNX-Runtime-orange)](https://onnxruntime.ai/)
 [![Made with ❤️ at Penn](https://img.shields.io/badge/Made%20with%20❤️%20at-Penn-red)](#)
+---
+
+### **Baseline**
+The existing **ONNX Runtime WebGPU demo** performs a standard text-to-image generation pipeline:
+
+This baseline generates only a single static image. It demonstrates ONNX inference on WebGPU but **lacks temporal modeling**, multi-frame scheduling, or GPU-level postprocessing.
 
 ---
 
-## Overview
-This project implements a **Video Diffusion Model (VDM)** for **temporally consistent video generation**, powered by **ONNX Runtime WebGPU**.
+### **Our Work**
+We extend this baseline into two progressively advanced pipelines for **video synthesis**:
 
-Unlike existing Stable Diffusion demos that generate static images, our model brings **AI-powered video synthesis directly into the browser** through GPU-accelerated inference.
+#### **1. Text-to-Image-to-Video (Multi-frame Synthesis)**
+We design a **GPU-accelerated multi-frame scheduler** that repeatedly invokes the ONNX UNet and VAE modules to produce a sequence of latent representations and decoded images.  
 
-We explore:
-- Native **ONNX 3D operators** (`Conv3D`, `GroupNorm3D`)
-- Custom **WGSL compute shaders**
-  
-Our goal: generate **short, coherent video clips (8–16 frames)** directly on the web.
+To ensure **temporal smoothness**:
+- The latents are first denoised halfway.  
+- A **Warping Shader** performs latent warping on the GPU using motion fields.  
+- The warped latents are re-noised and then passed into the **cross-attention block** to generate smooth, temporally consistent video.
 
----
+#### **2. Text-to-Video (Direct Video Diffusion)**
+In parallel, we implement essential **3D operators** such as:
+- `Conv3D`
+- `GroupNorm3D`
+- `Temporal Attention`
 
-## Motivation
-Recent diffusion models — such as **VideoCrafter2**, **Open-Sora**, and **AnimateDiff** — produce impressive results but require:
-- Heavy GPU resources  
-- Proprietary CUDA runtimes  
+These are integrated within **ONNX Runtime WebGPU** using custom WGSL compute kernels.  
+Our goal is to test whether a compact **Video Diffusion Model (VDM)** can be exported to ONNX format and executed directly in the browser.
 
-We aim to explore whether **WebGPU** and **ONNX Runtime** can deliver **lightweight, open, and portable** video generation directly in the browser — making diffusion-based video **accessible on everyday devices**.
+This involves:
+- Extending ONNX Runtime’s operator coverage for spatio-temporal tensor processing.  
+- Enabling **end-to-end video generation** entirely on WebGPU.  
+- Quantifying runtime behavior and performance feasibility for browser-based video diffusion.
 
----
-
-## Project Goals
-- ✅ Build a **browser-based video generation model** powered by WebGPU  
-- ⚙️ Use **ONNX Runtime WebGPU** for inference (UNet + VAE + Text Encoder)  
-- 🎬 Generate **8–16 frame videos** from text prompts  
-- 📊 Benchmark **WebGPU vs. CPU/WASM** performance  
-
----
-
-## Milestone Plan
-
-| Milestone | Task | Description |
-|------------|------|--------------|
-| **1** | Image Generation | Run **Stable Diffusion Turbo (image)** with ONNX Runtime WebGPU and verify results |
-| **2** | Temporal Extension | Extend to **multi-frame video generation** using temporal layers or GPU shaders |
-| **3** | Benchmarking | Export short video sequences (8–16 frames) and compare **WebGPU vs. CPU** performance |
-| **Final Demo** | Interactive Browser Demo | Web-based **text-to-video generation** using WebGPU |
+This component provides a **research-style exploration** of ONNX Runtime’s video modeling capabilities and introduces substantial GPU programming challenges in shader design and kernel optimization.
 
 ---
 
-## References & Inspiration
-- [Microsoft ONNX Runtime WebGPU — SD-Turbo Demo](https://opensource.microsoft.com/blog/2024/02/29/onnx-runtime-web-unleashes-generative-ai-in-the-browser-using-webgpu)  
-- [Stable Diffusion Turbo — ONNXRuntime/sd-turbo](https://huggingface.co/onnxruntime/sd-turbo)  
-- [Web Stable Diffusion — Stable Diffusion Model on WebGPU](https://websd.mlc.ai)
+### **Fallback Plan (if ONNX Video Model Loading Fails)**
+If a full ONNX-based video diffusion model cannot be executed due to **operator or memory limitations**, we pivot to a broader **GPU operator and systems study** on top of the text-to-image baseline.
+
+We will:
+- Implement multiple **temporal fusion operators** in WGSL (e.g., latent-space and image-space smoothing, various temporal kernels) and compare visual and runtime behavior.
+- Develop a small **3D-convolution / temporal enhancement module** purely in WebGPU to emulate temporal blocks in diffusion models.
+- Perform a **systematic performance study** across:
+  - Backends (WebGPU vs. WASM)
+  - Frame counts
+  - Resolutions  
+  - Detailed profiling of UNet, VAE, and temporal shaders.
+
+This fallback path still provides a **substantial GPU programming workload** involving:
+- Custom compute kernels  
+- Workgroup design  
+- Buffer management  
+- Performance analysis  
+
+It remains consistent with our overall goal of exploring **temporal consistency and GPU acceleration** for video generation.
 
 ---
 
-## Third-Party Code
-We build upon:
-- **ONNX Runtime WebGPU inference** from Microsoft’s SD-Turbo example  
-- Temporal modeling modules from open-source video diffusion frameworks  
+### **Added Components vs. Baseline**
+- ✅ Multi-frame scheduling and buffer management for sequential UNet/VAE inference  
+- ✅ Temporal Fusion WGSL compute shader (core GPU programming contribution)  
+- ✅ WebCodecs-based video assembly pipeline (no server or ffmpeg required)  
+- ✅ Optional ONNX Video Diffusion prototype with 3D operator evaluation  
+- ✅ WebGPU vs. WASM performance profiling and ablation analysis  
 
+---
 
+### **Expected Workload**
+**4-person team**, ~12–20 hours per week each:
+| Role | Responsibilities |
+|------|------------------|
+| Member 1 | ONNX Runtime integration and multi-frame scheduling |
+| Member 2–3 | WGSL temporal fusion shader design, optimization, and profiling |
+| Member 4 | Video assembly (WebCodecs) and benchmarking visualization |
+
+---
+
+### **Summary**
+This project transforms a **static text-to-image demo** into a **fully GPU-accelerated text-to-video synthesis pipeline**. It integrates:
+- Real shader programming  
+- GPU resource management  
+- System-level performance analysis  
+
+making it an ambitious, research-oriented, and technically rich **final project** for CIS 5650.
