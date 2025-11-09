@@ -89,9 +89,4 @@ It remains consistent with our overall goal of exploring **temporal consistency 
 ---
 
 ### **Summary**
-This project transforms a **static text-to-image demo** into a **fully GPU-accelerated text-to-video synthesis pipeline**. It integrates:
-- Real shader programming  
-- GPU resource management  
-- System-level performance analysis  
-
-making it an ambitious, research-oriented, and technically rich **final project** for CIS 5650.
+This scope transforms a static text-to-image demo into a full GPU-accelerated text-to-video synthesis pipeline, integrating real shader programming, GPU resource management, and system-level performance analysis—appropriate for a 4-person final project.
