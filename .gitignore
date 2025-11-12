@@ -1,0 +1,10 @@
+venv/
+onnx_models/
+*.onnx
+*.weight
+*.bias
+*.pt
+*.mp4
+__pycache__/
+*.pyc
+.DS_Store
