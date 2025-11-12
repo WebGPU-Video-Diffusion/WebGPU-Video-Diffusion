@@ -8,41 +8,117 @@
 <script type="module" src="dist/index.js"></script>
 
 <head>
-    <title>Stable Diffusion Turbo</title>
+    <title>WebGPU Video Diffusion - CIS 5650</title>
 </head>
 
 <style>
+    body {
+        background-color: #1a1a1a;
+    }
     .onerow {
-        display: flex;
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+        max-width: 900px;
+        margin: 0 auto;
+    }
+    .frame-container {
+        border: 2px solid #444;
+        padding: 8px;
+        background: #2a2a2a;
+        border-radius: 8px;
+        text-align: center;
+    }
+    .frame-container canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: 4px;
+    }
+    .frame-label {
+        color: #aaa;
+        font-size: 0.9em;
+        margin-bottom: 5px;
+    }
+    #video-player {
+        max-width: 512px;
+        width: 100%;
+        border: 3px solid #555;
+        border-radius: 8px;
     }
 </style>
 
 <body data-bs-theme="dark">
     <div class="container">
-        <div class="row pt-3">
-            <div class="col-md-9 col-12">
-                <h2>Stable Diffusion Turbo</h2>
+        <div class="row pt-4">
+            <div class="col-12 text-center">
+                <h1 class="display-4">WebGPU-Accelerated Video Diffusion Model</h1>
+                <p class="lead text-muted">CIS 5650: Final Project</p>
+                <p class="text-muted"><strong>Contributors:</strong> 
+                    <a href="https://github.com/kytttt" target="_blank" class="text-decoration-none">@Yuntian Ke</a> · 
+                    <a href="https://github.com/Pabloo0610" target="_blank" class="text-decoration-none">@Ruichi Zhang</a> · 
+                    <a href="https://github.com/rmurdock41" target="_blank" class="text-decoration-none">@Muqiao Lei</a> · 
+                    <a href="https://github.com/lobizhao" target="_blank" class="text-decoration-none">@Lobi Zhao</a>
+                </p>
+                <hr class="my-4">
             </div>
         </div>
         <div class="container p-2 card" id="input-area">
+            <div class="input-group mb-2">
+                <textarea class="form-control" id="user-input" placeholder="Describe the video you want to generate..."></textarea>
+                <button id="send-button" class="btn btn-primary">Generate</button>
+            </div>
             <div class="input-group">
-                <textarea class="form-control" id="user-input" placeholder="Type your question here..."></textarea>
-                <button id="send-button" class="btn btn-primary">Send</button>
+                <label class="input-group-text">Frames:</label>
+                <input type="number" class="form-control" id="num-images" value="2" min="1" max="8" style="max-width: 100px;">
+                <span class="input-group-text">Model: SD-Turbo (FP32)</span>
             </div>
         </div>
-        <div id="image_area">
+        <div id="video_area" class="container p-2 card mb-2 text-center" style="display: block;">
+            <h5>Video Preview</h5>
+            <video id="video-player" controls loop style="display: none; max-width: 400px; margin: 0 auto 10px;"></video>
+            <div>
+                <button id="download-video-btn" class="btn btn-success" style="display: none;">Download Video</button>
+            </div>
+        </div>
+        <div id="frame_slider_area" class="container p-2 card mb-2">
+            <label id="slider-label" style="display: none;">Frame: 1/8</label>
+            <input type="range" class="form-range" id="frame-slider" min="0" max="7" value="0" style="display: none;">
+        </div>
+        <div id="image_area" class="container p-2 card mb-2">
+            <h5>Generated Frames</h5>
             <div class="onerow">
-                <div id="img_div_0" style="margin-right: 4px;">
+                <div id="img_div_0" class="frame-container">
+                    <div class="frame-label">Frame 0</div>
                     <canvas id="img_canvas_0"></canvas>
                 </div>
-                <div id="img_div_1" style="margin-right: 4px;">
+                <div id="img_div_1" class="frame-container">
+                    <div class="frame-label">Frame 1</div>
                     <canvas id="img_canvas_1"></canvas>
                 </div>
-                <div id="img_div_2" style="margin-right: 4px;">
+                <div id="img_div_2" class="frame-container">
+                    <div class="frame-label">Frame 2</div>
                     <canvas id="img_canvas_2"></canvas>
                 </div>
-                <div id="img_div_3" style="margin-right: 4px;">
+                <div id="img_div_3" class="frame-container">
+                    <div class="frame-label">Frame 3</div>
                     <canvas id="img_canvas_3"></canvas>
+                </div>
+                <div id="img_div_4" class="frame-container">
+                    <div class="frame-label">Frame 4</div>
+                    <canvas id="img_canvas_4"></canvas>
+                </div>
+                <div id="img_div_5" class="frame-container">
+                    <div class="frame-label">Frame 5</div>
+                    <canvas id="img_canvas_5"></canvas>
+                </div>
+                <div id="img_div_6" class="frame-container">
+                    <div class="frame-label">Frame 6</div>
+                    <canvas id="img_canvas_6"></canvas>
+                </div>
+                <div id="img_div_7" class="frame-container">
+                    <div class="frame-label">Frame 7</div>
+                    <canvas id="img_canvas_7"></canvas>
                 </div>
             </div>
         </div>

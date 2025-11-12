@@ -74,10 +74,8 @@ function randn_latents(shape, noise_sigma) {
  */
 async function fetchAndCache(base_url, model_path) {
     const url = `${base_url}/${model_path}`;
-
     
     if (model_path.endsWith(".onnx_data")) {
-        log(`${model_path} (network, no cache)`);
         const response = await fetch(url);
         if (!response.ok) {
             throw new Error(`HTTP ${response.status} when fetching ${url}`);
@@ -91,14 +89,10 @@ async function fetchAndCache(base_url, model_path) {
         if (cachedResponse == undefined) {
             await cache.add(url);
             cachedResponse = await cache.match(url);
-            log(`${model_path} (network)`);
-        } else {
-            log(`${model_path} (cached)`);
         }
         const data = await cachedResponse.arrayBuffer();
         return data;
     } catch (error) {
-        log(`${model_path} (network, fallback)`);
         const response = await fetch(url);
         if (!response.ok) {
             throw new Error(`HTTP ${response.status} when fetching ${url}`);
@@ -112,20 +106,7 @@ async function fetchAndCache(base_url, model_path) {
  * load models used in the pipeline
  */
 async function load_models(models) {
-    const cache = await caches.open("onnx");
-    let missing = 0;
-    for (const [name, model] of Object.entries(models)) {
-        const url = `${config.model}/${model.url}`;
-        let cachedResponse = await cache.match(url);
-        if (cachedResponse === undefined) {
-            missing += model.size;
-        }
-    }
-    if (missing > 0) {
-        log(`downloading ${missing} MB from network ... it might take a while`);
-    } else {
-        log("loading...");
-    }
+    log("loading models...");
 
     for (const [name, model] of Object.entries(models)) {
         try {
@@ -155,12 +136,12 @@ async function load_models(models) {
             }
 
             const stop = performance.now();
-            log(`${model.url} in ${(stop - start).toFixed(1)}ms`);
+            log(`${name} loaded in ${(stop - start).toFixed(1)}ms`);
         } catch (e) {
-            log(`${model.url} failed, ${e}`);
+            log(`${name} failed: ${e}`);
         }
     }
-    log("ready.");
+    log("All models ready.");
 }
 
 
@@ -187,6 +168,7 @@ const models = {
 ort.env.wasm.wasmPaths =  'https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/';
 ort.env.wasm.numThreads = 1;
 ort.env.wasm.simd = true;
+ort.env.logLevel = 'error'; // Suppress warnings
 
 let tokenizer;
 let loading;
@@ -308,7 +290,8 @@ async function generate_image() {
         let canvases = [];
         await loading;
 
-        for (let j = 0; j < config.images; j++) {
+        const numImages = parseInt(document.getElementById('num-images').value) || config.images;
+        for (let j = 0; j < numImages; j++) {
             const div = document.getElementById(`img_div_${j}`);
             div.style.opacity = 0.5
         }
@@ -327,9 +310,27 @@ async function generate_image() {
 
         let perf_info = [`text_encoder: ${(performance.now() - start).toFixed(1)}ms`];
 
-        for (let j = 0; j < config.images; j++) {
-            const latent_shape = [1, 4, 64, 64];
-            let latent = new ort.Tensor(randn_latents(latent_shape, sigma), latent_shape);
+        // Generate base latent for temporal consistency
+        const latent_shape = [1, 4, 64, 64];
+        const base_latent_data = randn_latents(latent_shape, sigma);
+        let frames = [];
+        let frameImageData = [];
+
+        for (let j = 0; j < numImages; j++) {
+            // Progressive interpolation for temporal continuity
+            const t = j / Math.max(numImages - 1, 1); // 0 to 1
+            const frame_latent_data = new Float32Array(base_latent_data.length);
+            const noise_variation = randn_latents(latent_shape, sigma * 0.15);
+            
+            // Smooth transition with minimal variation
+            const base_weight = 0.92 + Math.sin(t * Math.PI * 2) * 0.03; // 0.89-0.95
+            const noise_weight = 1 - base_weight;
+            
+            for (let i = 0; i < base_latent_data.length; i++) {
+                frame_latent_data[i] = base_latent_data[i] * base_weight + noise_variation[i] * noise_weight;
+            }
+            
+            let latent = new ort.Tensor(frame_latent_data, latent_shape);
             const latent_model_input = scale_model_inputs(latent);
 
             // unet
@@ -356,9 +357,16 @@ async function generate_image() {
             perf_info.push(`vae_decoder: ${(performance.now() - start).toFixed(1)}ms`);
 
             draw_image(sample, j);
+            const imageData = sample.toImageData({ tensorLayout: 'NCWH', format: 'RGB' });
+            frameImageData.push(imageData);
             log(perf_info.join(", "))
             perf_info = [];
         }
+        // Generate video if multiple frames
+        if (numImages > 1) {
+            await generateVideo(frameImageData, numImages);
+        }
+        
         // this is a gpu-buffer we own, so we need to dispose it
         last_hidden_state.dispose();
         log("done");
@@ -367,6 +375,67 @@ async function generate_image() {
     }
 }
 
+
+async function generateVideo(frameImageData, numFrames) {
+    try {
+        log("Generating video...");
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 512;
+        const ctx = canvas.getContext('2d');
+        
+        const stream = canvas.captureStream(8);
+        const mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+        const chunks = [];
+        
+        mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+        mediaRecorder.onstop = () => {
+            const blob = new Blob(chunks, { type: 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            
+            const videoPlayer = document.getElementById('video-player');
+            videoPlayer.src = url;
+            videoPlayer.style.display = 'block';
+            
+            const downloadBtn = document.getElementById('download-video-btn');
+            downloadBtn.style.display = 'inline-block';
+            downloadBtn.onclick = () => {
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'generated_video.webm';
+                a.click();
+            };
+            
+            log("Video ready!");
+        };
+        
+        mediaRecorder.start();
+        
+        for (let i = 0; i < frameImageData.length; i++) {
+            ctx.putImageData(frameImageData[i], 0, 0);
+            await new Promise(resolve => setTimeout(resolve, 125));
+        }
+        
+        mediaRecorder.stop();
+        
+        // Setup frame slider
+        const slider = document.getElementById('frame-slider');
+        slider.max = numFrames - 1;
+        slider.value = 0;
+        slider.style.display = 'block';
+        document.getElementById('slider-label').style.display = 'block';
+        
+        slider.oninput = (e) => {
+            const frameIdx = parseInt(e.target.value);
+            document.getElementById('slider-label').innerText = `Frame: ${frameIdx + 1}/${numFrames}`;
+            for (let i = 0; i < numFrames; i++) {
+                document.getElementById(`img_div_${i}`).style.border = i === frameIdx ? '3px solid yellow' : 'none';
+            }
+        };
+    } catch (e) {
+        log(`Video generation failed: ${e}`);
+    }
+}
 
 async function hasFp16() {
     try {
