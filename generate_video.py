@@ -15,22 +15,49 @@ models_dir = "onnx_models_0"
 print("\n[1/5] Loading models...")
 
 
-text_encoder_providers = ['CPUExecutionProvider']
-unet_providers         = ['CPUExecutionProvider']  
-vae_providers          = ['CPUExecutionProvider']
+# text_encoder_providers = ['CPUExecutionProvider']
+# unet_providers         = ['CPUExecutionProvider']  
+# vae_providers          = ['CPUExecutionProvider']
+text_encoder_providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+#unet_providers         = [ 'CPUExecutionProvider']
+vae_providers          = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+unet_providers = [
+    (
+        'CUDAExecutionProvider',
+        {
+            'device_id': 0,          
+            'enable_cuda_graph': 0, 
+            # 'gpu_mem_limit': 2 * 1024 * 1024 * 1024, 
+        }
+    ),
+    'CPUExecutionProvider'
+]
+so = ort.SessionOptions()
+so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+
+so.log_severity_level = 1
 
 text_encoder_session = ort.InferenceSession(
     f"{models_dir}/text_encoder.onnx",
     providers=text_encoder_providers
 )
+# unet_session = ort.InferenceSession(
+#     f"{models_dir}/unet_video.onnx",
+#     providers=unet_providers
+# )
 unet_session = ort.InferenceSession(
     f"{models_dir}/unet_video.onnx",
+    sess_options=so,
     providers=unet_providers
 )
 vae_decoder_session = ort.InferenceSession(
     f"{models_dir}/vae_decoder.onnx",
     providers=vae_providers
 )
+print("TextEncoder using:", text_encoder_session.get_providers())
+print("UNet using       :", unet_session.get_providers())
+print("VAE using        :", vae_decoder_session.get_providers())
+
 
 print(" ONNX models loaded")
 
@@ -82,8 +109,8 @@ print(f"  Base text embeddings: {text_embeddings_combined.shape}")
 
 batch_size = 1
 num_frames = 16
-height = 48
-width = 48
+height = 32
+width = 32
 guidance_scale = 7.5
 
 F = num_frames
@@ -167,7 +194,7 @@ for f in tqdm(range(num_frames), desc="Decoding"):
 print(f"Decoded {len(frames)} frames")
 
 print("\n[5/5] Saving video...")
-output_path = "cat_fp32.mp4"
+output_path = "trygpu_fp32.mp4"
 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 h, w = frames[0].shape[:2]
 out = cv2.VideoWriter(output_path, fourcc, 8.0, (w, h))
