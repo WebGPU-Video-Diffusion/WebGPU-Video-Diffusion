@@ -1,17 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 //
-// An example how to run sd-turbo with webgpu in onnxruntime-web.
+// An example how to run sd1.5 with webgpu in onnxruntime-web.
 //
 
 import ort from 'onnxruntime-web/webgpu';
+import { PNDMScheduler } from './PNDMScheduler.js';
 
 function log(i) { console.log(i); document.getElementById('status').innerText += `\n${i}`; }
 
 /*
  * get configuration from url
 */
-
 function toBigInt64Array(ids) {
     const src = Array.isArray(ids) ? ids : Array.from(ids);
     const out = new BigInt64Array(src.length);
@@ -25,7 +25,7 @@ function getConfig() {
     const query = window.location.search.substring(1);
     var config = {
         // model: "models/onnx-sd-turbo-fp16",
-        model:  "https://huggingface.co/ykeee/sd-turbo-onnx-fp32/resolve/main",
+        model: "sd15-onnx-web",
         provider: "webgpu",
         device: "gpu",
         threads: "1",
@@ -62,7 +62,6 @@ function randn_latents(shape, noise_sigma) {
     });
 
     let data = new Float32Array(size);
-    // Loop over the shape dimensions
     for (let i = 0; i < size; i++) {
         data[i] = randn() * noise_sigma;
     }
@@ -74,8 +73,9 @@ function randn_latents(shape, noise_sigma) {
  */
 async function fetchAndCache(base_url, model_path) {
     const url = `${base_url}/${model_path}`;
-    
+
     if (model_path.endsWith(".onnx_data")) {
+        log(`${model_path} (network, no cache)`);
         const response = await fetch(url);
         if (!response.ok) {
             throw new Error(`HTTP ${response.status} when fetching ${url}`);
@@ -89,10 +89,14 @@ async function fetchAndCache(base_url, model_path) {
         if (cachedResponse == undefined) {
             await cache.add(url);
             cachedResponse = await cache.match(url);
+            log(`${model_path} (network)`);
+        } else {
+            log(`${model_path} (cached)`);
         }
         const data = await cachedResponse.arrayBuffer();
         return data;
     } catch (error) {
+        log(`${model_path} (network, fallback)`);
         const response = await fetch(url);
         if (!response.ok) {
             throw new Error(`HTTP ${response.status} when fetching ${url}`);
@@ -101,12 +105,24 @@ async function fetchAndCache(base_url, model_path) {
     }
 }
 
-
 /*
  * load models used in the pipeline
  */
 async function load_models(models) {
-    log("loading models...");
+    const cache = await caches.open("onnx");
+    let missing = 0;
+    for (const [name, model] of Object.entries(models)) {
+        const url = `${config.model}/${model.url}`;
+        let cachedResponse = await cache.match(url);
+        if (cachedResponse === undefined) {
+            missing += model.size;
+        }
+    }
+    if (missing > 0) {
+        log(`downloading ${missing} MB from network ... it might take a while`);
+    } else {
+        log("loading...");
+    }
 
     for (const [name, model] of Object.entries(models)) {
         try {
@@ -123,8 +139,8 @@ async function load_models(models) {
                     ...sess_opt,
                     externalData: [
                         {
-                            path: "./model.onnx_data",   
-                            data: externalUrl,          
+                            path: "./model.onnx_data",
+                            data: externalUrl,
                         },
                     ],
                 };
@@ -136,14 +152,13 @@ async function load_models(models) {
             }
 
             const stop = performance.now();
-            log(`${name} loaded in ${(stop - start).toFixed(1)}ms`);
+            log(`${model.url} in ${(stop - start).toFixed(1)}ms`);
         } catch (e) {
-            log(`${name} failed: ${e}`);
+            log(`${model.url} failed, ${e}`);
         }
     }
-    log("All models ready.");
+    log("ready.");
 }
-
 
 const config = getConfig();
 
@@ -151,32 +166,43 @@ const models = {
     "unet": {
         url: "unet/model.onnx", size: 640,
         external: "unet/model.onnx_data",
-        // should have 'steps: 1' but will fail to create the session
-        opt: { freeDimensionOverrides: { batch_size: 1, num_channels: 4, height: 64, width: 64, sequence_length: 77, } }
+        opt: { freeDimensionOverrides: { batch_size: 1, num_channels: 4, height: 64, width: 64, sequence_length: 77 } }
     },
     "text_encoder": {
         url: "text_encoder/model.onnx", size: 1700,
-        // should have 'sequence_length: 77' but produces a bad image
-        opt: { freeDimensionOverrides: { batch_size: 1, } },
+        opt: { freeDimensionOverrides: { batch_size: 1 } },
     },
     "vae_decoder": {
         url: "vae_decoder/model.onnx", size: 95,
         opt: { freeDimensionOverrides: { batch_size: 1, num_channels_latent: 4, height_latent: 64, width_latent: 64 } }
     }
-}
+};
 
-ort.env.wasm.wasmPaths =  'https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/';
+ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/';
 ort.env.wasm.numThreads = 1;
 ort.env.wasm.simd = true;
-ort.env.logLevel = 'error'; // Suppress warnings
 
 let tokenizer;
 let loading;
 const sigma = 14.6146;
 const gamma = 0;
 const vae_scaling_factor = 0.18215;
-const text = document.getElementById("user-input");
 
+// CFG 设置
+const negativePrompt = "blurry, low quality, bad anatomy";
+const guidance_scale = 7.5;
+
+const scheduler = new PNDMScheduler({
+    num_train_timesteps: 1000,
+    beta_start: 0.00085,
+    beta_end: 0.012,
+    beta_schedule: 'scaled_linear',
+    prediction_type: 'epsilon',
+    skip_prk_steps: true,
+    final_alpha_cumprod: 1e-3,
+});
+
+const text = document.getElementById("user-input");
 text.value = "Paris with the river in the background";
 
 const opt = {
@@ -218,42 +244,15 @@ document.getElementById('user-input').addEventListener('keydown', function (e) {
         generate_image();
     }
 });
-document.getElementById('send-button').addEventListener('click', function (e) {
-    generate_image()
+document.getElementById('send-button').addEventListener('click', function () {
+    generate_image();
 });
 
 /*
- * scale the latents
-*/
-function scale_model_inputs(t) {
-    const d_i = t.data;
-    const d_o = new Float32Array(d_i.length);
-
-    const divi = (sigma ** 2 + 1) ** 0.5;
-    for (let i = 0; i < d_i.length; i++) {
-        d_o[i] = d_i[i] / divi;
-    }
-    return new ort.Tensor(d_o, t.dims);
-}
-
-/*
- * Poor mens EulerA step
- * Since this example is just sd-turbo, implement the absolute minimum needed to create an image
- * Maybe next step is to support all sd flavors and create a small helper model in onnx can deal
- * much more efficient with latents.
+ * scale the latents (sigma 归一化)
  */
-function step(model_output, sample) {
-    const d_o = new Float32Array(model_output.data.length);
-    const prev_sample = new ort.Tensor(d_o, model_output.dims);
-    const sigma_hat = sigma * (gamma + 1);
-
-    for (let i = 0; i < model_output.data.length; i++) {
-        const pred_original_sample = sample.data[i] - sigma_hat * model_output.data[i];
-        const derivative = (sample.data[i] - pred_original_sample) / sigma_hat;
-        const dt = 0 - sigma_hat;
-        d_o[i] = (sample.data[i] + derivative * dt) / vae_scaling_factor;
-    }
-    return prev_sample;
+function scale_model_inputs(t) {
+    return t;
 }
 
 /**
@@ -261,22 +260,23 @@ function step(model_output, sample) {
  * @param {ort.Tensor} t
  * @param {number} image_nr
 */
-function draw_image(t, image_nr) {
-    let pix = t.data;
-    for (var i = 0; i < pix.length; i++) {
+async function draw_image(t, image_nr) {
+    const pix = await t.getData();
+    for (let i = 0; i < pix.length; i++) {
         let x = pix[i];
-        x = x / 2 + 0.5
+        x = x / 2 + 0.5;
         if (x < 0.) x = 0.;
         if (x > 1.) x = 1.;
         pix[i] = x;
     }
-    const imageData = t.toImageData({ tensorLayout: 'NCWH', format: 'RGB' });
+    const tmpTensor = new ort.Tensor('float32', pix, t.dims);
+    const imageData = tmpTensor.toImageData({ tensorLayout: 'NCWH', format: 'RGB' });
     const canvas = document.getElementById(`img_canvas_${image_nr}`);
     canvas.width = imageData.width;
     canvas.height = imageData.height;
     canvas.getContext('2d').putImageData(imageData, 0, 0);
     const div = document.getElementById(`img_div_${image_nr}`);
-    div.style.opacity = 1.
+    div.style.opacity = 1.;
 }
 
 async function generate_image() {
@@ -284,165 +284,137 @@ async function generate_image() {
         document.getElementById('status').innerText = "generating ...";
 
         if (tokenizer === undefined) {
+            // AutoTokenizer 依然来自全局（通过 HTML script 引入）
             tokenizer = await AutoTokenizer.from_pretrained('Xenova/clip-vit-base-patch16');
             tokenizer.pad_token_id = 0;
         }
-        let canvases = [];
         await loading;
 
-        const numImages = parseInt(document.getElementById('num-images').value) || config.images;
-        for (let j = 0; j < numImages; j++) {
+        for (let j = 0; j < config.images; j++) {
             const div = document.getElementById(`img_div_${j}`);
-            div.style.opacity = 0.5
+            div.style.opacity = 0.5;
         }
 
-        const { input_ids } = await tokenizer(text.value, { padding: true, max_length: 77, truncation: true, return_tensor: false });
+        // 正向 prompt
+        const { input_ids } = await tokenizer(text.value, {
+            padding: true,
+            max_length: 77,
+            truncation: true,
+            return_tensor: false
+        });
 
-        // text-encoder
+        // 负向 prompt
+        const { input_ids: uncond_ids } = await tokenizer(negativePrompt, {
+            padding: true,
+            max_length: 77,
+            truncation: true,
+            return_tensor: false
+        });
+
+        // text-encoder：分别编码 cond / uncond
         let start = performance.now();
-        // const { last_hidden_state } = await models.text_encoder.sess.run(
-        //     { "input_ids": new ort.Tensor("int32", input_ids, [1, input_ids.length]) });
         const input_ids_i64 = toBigInt64Array(input_ids);
+        const uncond_ids_i64 = toBigInt64Array(uncond_ids);
 
-        const { last_hidden_state } = await models.text_encoder.sess.run(
-            { "input_ids": new ort.Tensor("int64", input_ids_i64, [1, input_ids.length]) }
-        );
+        const condOut = await models.text_encoder.sess.run({
+            "input_ids": new ort.Tensor("int64", input_ids_i64, [1, input_ids.length])
+        });
+        const uncondOut = await models.text_encoder.sess.run({
+            "input_ids": new ort.Tensor("int64", uncond_ids_i64, [1, uncond_ids.length])
+        });
+
+        const cond_hidden = condOut.last_hidden_state;   // [1,77,768]
+        const uncond_hidden = uncondOut.last_hidden_state; // [1,77,768]
 
         let perf_info = [`text_encoder: ${(performance.now() - start).toFixed(1)}ms`];
 
-        // Generate base latent for temporal consistency
-        const latent_shape = [1, 4, 64, 64];
-        const base_latent_data = randn_latents(latent_shape, sigma);
-        let frames = [];
-        let frameImageData = [];
+        const num_inference_steps = 30;
+        scheduler.setTimesteps(num_inference_steps);
+        console.log('timesteps', scheduler.timesteps.slice(0, 10));
 
-        for (let j = 0; j < numImages; j++) {
-            // Progressive interpolation for temporal continuity
-            const t = j / Math.max(numImages - 1, 1); // 0 to 1
-            const frame_latent_data = new Float32Array(base_latent_data.length);
-            const noise_variation = randn_latents(latent_shape, sigma * 0.15);
-            
-            // Smooth transition with minimal variation
-            const base_weight = 0.92 + Math.sin(t * Math.PI * 2) * 0.03; // 0.89-0.95
-            const noise_weight = 1 - base_weight;
-            
-            for (let i = 0; i < base_latent_data.length; i++) {
-                frame_latent_data[i] = base_latent_data[i] * base_weight + noise_variation[i] * noise_weight;
-            }
-            
-            let latent = new ort.Tensor(frame_latent_data, latent_shape);
-            const latent_model_input = scale_model_inputs(latent);
-
-            // unet
-            start = performance.now();
-            const timestep = new ort.Tensor(
-                "float32",
-                new Float32Array([999.0]),  
-                []                          
+        for (let j = 0; j < config.images; j++) {
+            const latent_shape = [1, 4, 64, 64];
+            let latents = new ort.Tensor(
+                randn_latents(latent_shape, scheduler.initNoiseSigma),
+                latent_shape
             );
-            let feed = {
-                "sample": latent_model_input,
-                "timestep": timestep,
-                "encoder_hidden_states": last_hidden_state,
-            };
-            let { out_sample } = await models.unet.sess.run(feed);
-            perf_info.push(`unet: ${(performance.now() - start).toFixed(1)}ms`);
 
-            // scheduler
-            const new_latents = step(out_sample, latent)
+            for (let i = 0; i < scheduler.timesteps.length; i++) {
+                const t = scheduler.timesteps[i];
+
+                const latent_model_input = scale_model_inputs(latents);
+
+                const latentsCpu = await latents.getData();
+                console.log('before step', t, Math.min(...latentsCpu), Math.max(...latentsCpu));
+
+                start = performance.now();
+                const tTensor = new ort.Tensor("float32", new Float32Array([t]), []);
+
+                // 1) UNet with unconditional embedding
+                let feed = {
+                    "sample": latent_model_input,
+                    "timestep": tTensor,
+                    "encoder_hidden_states": uncond_hidden,
+                };
+                const { out_sample: out_uncond } = await models.unet.sess.run(feed);
+
+                // 2) UNet with conditional embedding
+                feed = {
+                    "sample": latent_model_input,
+                    "timestep": tTensor,
+                    "encoder_hidden_states": cond_hidden,
+                };
+                const { out_sample: out_cond } = await models.unet.sess.run(feed);
+
+                perf_info.push(`unet t=${t}: ${(performance.now() - start).toFixed(1)}ms`);
+
+                // CFG: eps = eps_uncond + s * (eps_text - eps_uncond)
+                const eps_uncond = await out_uncond.getData();
+                const eps_text = await out_cond.getData();
+                const guided = new Float32Array(eps_uncond.length);
+                for (let k = 0; k < eps_uncond.length; k++) {
+                    guided[k] = eps_uncond[k] + guidance_scale * (eps_text[k] - eps_uncond[k]);
+                }
+                const guidedTensor = new ort.Tensor("float32", guided, [1, 4, 64, 64]);
+
+                latents = scheduler.step(guidedTensor, t, latents);
+
+                const latentsCpuAfter = await latents.getData();
+                console.log('after step', t, Math.min(...latentsCpuAfter), Math.max(...latentsCpuAfter));
+            }
 
             // vae_decoder
             start = performance.now();
-            const { sample } = await models.vae_decoder.sess.run({ "latent_sample": new_latents });
+            const latentsCpuFinal = await latents.getData();
+            const scaledLatentsData = Float32Array.from(latentsCpuFinal, x => x / vae_scaling_factor);
+            const scaled_latents = new ort.Tensor(
+                "float32",
+                scaledLatentsData,
+                latents.dims
+            );
+            const { sample } = await models.vae_decoder.sess.run({ "latent_sample": scaled_latents });
             perf_info.push(`vae_decoder: ${(performance.now() - start).toFixed(1)}ms`);
 
-            draw_image(sample, j);
-            const imageData = sample.toImageData({ tensorLayout: 'NCWH', format: 'RGB' });
-            frameImageData.push(imageData);
-            log(perf_info.join(", "))
+            await draw_image(sample, j);
+            log(perf_info.join(", "));
             perf_info = [];
         }
-        // Generate video if multiple frames
-        if (numImages > 1) {
-            await generateVideo(frameImageData, numImages);
-        }
-        
-        // this is a gpu-buffer we own, so we need to dispose it
-        last_hidden_state.dispose();
+
+        cond_hidden.dispose();
+        uncond_hidden.dispose();
+
         log("done");
     } catch (e) {
         log(e);
     }
 }
 
-
-async function generateVideo(frameImageData, numFrames) {
-    try {
-        log("Generating video...");
-        const canvas = document.createElement('canvas');
-        canvas.width = 512;
-        canvas.height = 512;
-        const ctx = canvas.getContext('2d');
-        
-        const stream = canvas.captureStream(8);
-        const mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
-        const chunks = [];
-        
-        mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
-        mediaRecorder.onstop = () => {
-            const blob = new Blob(chunks, { type: 'video/webm' });
-            const url = URL.createObjectURL(blob);
-            
-            const videoPlayer = document.getElementById('video-player');
-            videoPlayer.src = url;
-            videoPlayer.style.display = 'block';
-            
-            const downloadBtn = document.getElementById('download-video-btn');
-            downloadBtn.style.display = 'inline-block';
-            downloadBtn.onclick = () => {
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'generated_video.webm';
-                a.click();
-            };
-            
-            log("Video ready!");
-        };
-        
-        mediaRecorder.start();
-        
-        for (let i = 0; i < frameImageData.length; i++) {
-            ctx.putImageData(frameImageData[i], 0, 0);
-            await new Promise(resolve => setTimeout(resolve, 125));
-        }
-        
-        mediaRecorder.stop();
-        
-        // Setup frame slider
-        const slider = document.getElementById('frame-slider');
-        slider.max = numFrames - 1;
-        slider.value = 0;
-        slider.style.display = 'block';
-        document.getElementById('slider-label').style.display = 'block';
-        
-        slider.oninput = (e) => {
-            const frameIdx = parseInt(e.target.value);
-            document.getElementById('slider-label').innerText = `Frame: ${frameIdx + 1}/${numFrames}`;
-            for (let i = 0; i < numFrames; i++) {
-                document.getElementById(`img_div_${i}`).style.border = i === frameIdx ? '3px solid yellow' : 'none';
-            }
-        };
-    } catch (e) {
-        log(`Video generation failed: ${e}`);
-    }
-}
-
 async function hasFp16() {
     try {
-        const adapter = await navigator.gpu.requestAdapter()
-        return adapter.features.has('shader-f16')
+        const adapter = await navigator.gpu.requestAdapter();
+        return adapter.features.has('shader-f16');
     } catch (e) {
-        return false
+        return false;
     }
 }
 
