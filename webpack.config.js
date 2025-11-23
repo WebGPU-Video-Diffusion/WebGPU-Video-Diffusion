@@ -12,8 +12,8 @@ export default {
     mode: 'development',
     devtool: 'source-map',
     entry: {
-        'dist/index': './index.js',
-        'dist/index.min': './index.js',
+        'dist/main': './t2v/main.js',
+        'dist/main.min': './t2v/main.js',
     },
     output: {
         filename: '[name].js',
@@ -23,11 +23,15 @@ export default {
         },
     },
     plugins: [
-        // Copy .wasm files to dist folder
+        // Copy .wasm and .mjs files to dist folder
         new CopyWebpackPlugin({
             patterns: [
                 {
                     from: 'node_modules/onnxruntime-web/dist/*.wasm',
+                    to: 'dist/[name][ext]'
+                },
+                {
+                    from: 'node_modules/onnxruntime-web/dist/*.mjs',
                     to: 'dist/[name][ext]'
                 },
             ],
@@ -44,7 +48,7 @@ export default {
         static: {
             directory: __dirname
         },
-        port: 8080
+        port: 8081
     },
     experiments: {
         outputModule: true,
