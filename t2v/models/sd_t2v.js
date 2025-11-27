@@ -1,43 +1,81 @@
 import * as ort from 'onnxruntime-web/webgpu';
-import { SDModel } from './sd.js';
-import { randn_latents, toBigInt64Array } from '../utils/common.js';
+import { toBigInt64Array } from '../utils/common.js';
+import { randomNormalTensor, cat } from '../util/Tensor.js';
+import { PNDMScheduler } from '../scheduler/PNDMScheduler.js';
+import { Tensor } from '@xenova/transformers';
+import { Session } from '../backends/index.js';
 
 ort.env.wasm.numThreads = 1;
 ort.env.wasm.simd = true;
 ort.env.wasm.wasmPaths = document.location.pathname.replace('index.html', '') + 'dist/';
 
-function log(i) { 
-    console.log(i); 
-    document.getElementById('status').innerText += `\n${i}`; 
-}
 
+function log(i) { console.log(i); document.getElementById('status').innerText += `\n${i}`; }
+
+const sigma = 14.6146;
+const gamma = 0;
 const vae_scaling_factor = 0.18215;
 
-/**
- * Text-to-Video Pipeline
- * Extends SDModel to reuse text_encoder, vae_decoder and other components
- */
-export class SDT2VModel extends SDModel {
+//
+// load file from server or cache
+//
+async function fetchAndCache(url) {
+    // if (url.endsWith('.onnx_data') || url.endsWith('.weights.pb')) {
+    //     log(`${url} (network, no cache)`);
+    //     const response = await fetch(url);
+    //     if (!response.ok) {
+    //         throw new Error(`HTTP ${response.status} when fetching onnx data ${url}`);
+    //     }
+    //     return await response.arrayBuffer();
+    // }
+    try {
+        const cache = await caches.open("onnx");
+        let cachedResponse = await cache.match(url);
+        if (cachedResponse === undefined) {
+            log(`${url} (network)`);
+            const buffer = await fetch(url).then(response => response.arrayBuffer());
+            try {
+                await cache.put(url, new Response(buffer));
+            } catch (error) {
+                console.error(error);
+            }
+            return buffer;
+        }
+        log(`${url} (cached)`);
+        const data = await cachedResponse.arrayBuffer();
+        return data;
+    } catch (error) {
+        log(`can't fetch ${url}`);
+        throw error;
+    }
+}
+
+export class SDModel {
     constructor(modelConfig) {
-        super(modelConfig);
-        // T2V specific model components
-        this.models = {
-            "text_encoder": {},      // Inherited from SDModel
-            "vae_decoder": {},       // Inherited from SDModel
-            "unet_t2v": {},          // T2V specific temporal UNet
-        };
-        
-        // T2V specific parameters
-        this.num_frames = modelConfig.num_frames || 16;  // Number of frames to generate
-        this.fps = modelConfig.fps || 8;                 // Frames per second
-        this.video_length = modelConfig.video_length || 2; // Video length in seconds
+        this.modelConfig = modelConfig;
+        this.models = {"unet": {}, "text_encoder": {}, "vae_decoder": {}};
+        this.init_tokenizer();
+        this.negativePrompt = "blurry, low quality, bad anatomy";
+        this.guidance_scale = 7.5;
+        // Batch size for parallel image generation
+        this.batch_size = modelConfig.batchSize || 1;
+        // TODO: for now we use fixed config
+        this.scheduler = new PNDMScheduler({
+            num_train_timesteps: 1000,
+            beta_start: 0.00085,
+            beta_end: 0.012,
+            beta_schedule: 'scaled_linear',
+            prediction_type: 'epsilon',
+            skip_prk_steps: true,
+            final_alpha_cumprod: 1e-3,
+        });
     }
 
-    /**
-     * Load T2V models
-     * @param {string} base_model - HuggingFace model path
-     * @param {object} options - Loading options
-     */
+    async init_tokenizer() {
+        this.tokenizer = await AutoTokenizer.from_pretrained('Xenova/clip-vit-base-patch16');
+        this.tokenizer.pad_token_id = 0;
+    }
+
     async load(base_model, options) {
         const models = options.models;
         const provider = options.provider || "webgpu";
@@ -45,279 +83,238 @@ export class SDT2VModel extends SDModel {
         const local = options.local;
         const hasFP16 = (provider === "wasm") ? false : options.hasFP16;
         this.profiler = options.profiler;
-
         for (const [name, model] of Object.entries(models)) {
-            const model_path = (local) 
-                ? "models/" + base_model 
-                : "https://huggingface.co/" + base_model + "/resolve/main/" + model.url;
+            const model_path = (local) ? "models/" + base_model : "https://huggingface.co/" + base_model + "/resolve/main/" + model.url;
 
-            log(`loading... ${name}, ${provider}`);
-            
-            const model_bytes = await this.fetchAndCache(model_path + "/model.onnx");
-            const externaldata = (model.externaldata) ? (model_path + "/model.onnx_data") : false;
-            
-            let modelSize = model_bytes.byteLength;
-            if (externaldata) {
-                modelSize += externaldata.byteLength;
+            log(`loading... ${name},  ${provider}`);
+            const json_bytes = await fetchAndCache(model_path + "/config.json");
+            let textDecoder = new TextDecoder();
+            //const model_config = JSON.parse(textDecoder.decode(json_bytes));
+
+            let modelSource;
+            let externaldata;
+
+            if (model.externaldata) {
+                modelSource = model_path + "/model.onnx";
+                externaldata = model_path + "/model.onnx_data";
+                log(`model ${name} uses external data; loading directly from path`);
+            } else {
+                modelSource = await fetchAndCache(model_path + "/model.onnx");
+                externaldata = undefined;
+                const modelSizeMB = Math.round(modelSource.byteLength / 1024 / 1024);
+                log(`model size ${modelSizeMB} MB`);
             }
-            log(`model size ${Math.round(modelSize / 1024 / 1024)} MB`);
 
             const opt = {
                 executionProviders: [provider]
-            };
+            }
 
-            if (externaldata) {
+            if (externaldata !== undefined) {
                 opt.externalData = [
                     {
                         data: externaldata,
                         path: "model.onnx_data"
                     },
-                ];
+                ]
             }
-
             if (verbose) {
                 opt.logSeverityLevel = 0;
                 opt.logVerbosityLevel = 0;
                 ort.env.logLevel = "verbose";
             }
-
             log(`creating session for ${name} ...`);
-            if (externaldata) {
-                this.models[name] = await ort.InferenceSession.create(model_path + "/model.onnx", opt);
-            } else {
-                this.models[name] = await ort.InferenceSession.create(model_bytes, opt);
-            }
-            
+            this.models[name] = await Session.create(
+                modelSource,
+                externaldata,
+                externaldata ? "model.onnx_data" : undefined,
+                model,
+                opt
+            );
             this.dtype = (hasFP16) ? "float16" : "float32";
         }
     }
 
-    /**
-     * Helper method: Fetch file from cache or network
-     */
-    async fetchAndCache(url) {
+    async infer(text) {
         try {
-            const cache = await caches.open("onnx");
-            let cachedResponse = await cache.match(url);
-            if (cachedResponse === undefined) {
-                log(`${url} (network)`);
-                const buffer = await fetch(url).then(response => response.arrayBuffer());
-                try {
-                    await cache.put(url, new Response(buffer));
-                } catch (error) {
-                    console.error(error);
-                }
-                return buffer;
-            }
-            log(`${url} (cached)`);
-            const data = await cachedResponse.arrayBuffer();
-            return data;
-        } catch (error) {
-            log(`can't fetch ${url}`);
-            throw error;
-        }
-    }
-
-    /**
-     * Text-to-Video main inference function
-     * @param {HTMLInputElement} text - Input text prompt
-     */
-    async text_to_video(text) {
-        try {
-            document.getElementById('status').innerText = "generating video...";
-
-            let perf_info = [];
+            document.getElementById('status').innerText = "generating ...";
+            
+            const batch_size = this.batch_size;
             let start = performance.now();
+            const prompt_embeds = await this.getPromptEmbeds(text.value, this.negativePrompt);
 
-            // ============ Step 1: Text Encoding ============
-            log("Step 1: Encoding text...");
-            const { input_ids } = await this.tokenizer(text.value, {
-                padding: true,
-                max_length: 77,
-                truncation: true,
-                return_tensor: false
-            });
+            let perf_info = [`text_encoder: ${(performance.now() - start).toFixed(1)}ms`];
 
-            // Optional: negative prompt for CFG
-            const { input_ids: uncond_ids } = await this.tokenizer(this.negativePrompt, {
-                padding: true,
-                max_length: 77,
-                truncation: true,
-                return_tensor: false
-            });
-
-            const input_ids_i64 = toBigInt64Array(input_ids);
-            const uncond_ids_i64 = toBigInt64Array(uncond_ids);
-
-            const condOut = await this.models["text_encoder"].run({
-                "input_ids": new ort.Tensor("int64", input_ids_i64, [1, input_ids.length])
-            });
-            const uncondOut = await this.models["text_encoder"].run({
-                "input_ids": new ort.Tensor("int64", uncond_ids_i64, [1, uncond_ids.length])
-            });
-
-            const cond_hidden = condOut.last_hidden_state;     // [1, 77, 768]
-            const uncond_hidden = uncondOut.last_hidden_state; // [1, 77, 768]
-            
-            perf_info.push(`text_encoder: ${(performance.now() - start).toFixed(1)}ms`);
-
-            // ============ Step 2: Initialize Video Latents ============
-            log("Step 2: Initializing video latents...");
-            start = performance.now();
-            
-            // Video latents shape: [batch, channels, frames, height, width]
-            // For SD, typically [1, 4, num_frames, 64, 64]
-            const latent_shape = [1, 4, this.num_frames, 64, 64];
-            let video_latents = new ort.Tensor(
-                randn_latents(latent_shape, this.scheduler.initNoiseSigma),
-                latent_shape
-            );
-            
-            perf_info.push(`init_latents: ${(performance.now() - start).toFixed(1)}ms`);
-
-            // ============ Step 3: Denoising Loop ============
-            log("Step 3: Denoising loop...");
             const num_inference_steps = 30;
             this.scheduler.setTimesteps(num_inference_steps);
+            const timesteps = getSchedulerTimesteps(this.scheduler);
+            console.log('timesteps', timesteps.slice(0, 10));
 
-            for (let i = 0; i < this.scheduler.timesteps.length; i++) {
-                const t = this.scheduler.timesteps[i];
-                log(`Denoising step ${i+1}/${num_inference_steps}, t=${t}`);
-                
+            const latent_shape = [batch_size, 4, 64, 64];
+            let latents = randomNormalTensor(latent_shape, 0, this.scheduler.initNoiseSigma);
+            const doClassifierFreeGuidance = this.guidance_scale > 1.0;
+
+            for (const t of timesteps) {
+                const latentsCpu = await tensorData(latents);
+                console.log('before step', t, Math.min(...latentsCpu), Math.max(...latentsCpu));
+
                 start = performance.now();
-                
-                // 3.1: Prepare latent model input (may need scaling)
-                const latent_model_input = video_latents;
                 const tTensor = new ort.Tensor("float32", new Float32Array([t]), []);
-
-                // 3.2: UNet forward pass (unconditional)
+                const latent_input = doClassifierFreeGuidance ? cat([latents, latents.clone()]) : latents;
                 let feed = {
-                    "sample": latent_model_input,
+                    "sample": toOrtTensor(latent_input),
                     "timestep": tTensor,
-                    "encoder_hidden_states": uncond_hidden,
+                    "encoder_hidden_states": prompt_embeds,
                 };
-                const { out_sample: out_uncond } = await this.models["unet_t2v"].run(feed);
-
-                // 3.3: UNet forward pass (conditional)
-                feed = {
-                    "sample": latent_model_input,
-                    "timestep": tTensor,
-                    "encoder_hidden_states": cond_hidden,
-                };
-                const { out_sample: out_cond } = await this.models["unet_t2v"].run(feed);
-
-                // 3.4: Classifier-Free Guidance (CFG)
-                const eps_uncond = await out_uncond.getData();
-                const eps_text = await out_cond.getData();
-                const guided = new Float32Array(eps_uncond.length);
-                for (let k = 0; k < eps_uncond.length; k++) {
-                    guided[k] = eps_uncond[k] + this.guidance_scale * (eps_text[k] - eps_uncond[k]);
-                }
-                const guidedTensor = new ort.Tensor("float32", guided, latent_shape);
-
-                // 3.5: Scheduler step (update latents)
-                video_latents = this.scheduler.step(guidedTensor, t, video_latents);
+                const noise = await this.models["unet"].run(feed);
                 
-                perf_info.push(`unet_t2v step ${i+1}: ${(performance.now() - start).toFixed(1)}ms`);
+                let noise_pred = noise.out_sample;
+                perf_info.push(`unet t=${t}: ${(performance.now() - start).toFixed(1)}ms`);
+
+                if(doClassifierFreeGuidance) {
+                    const [noisePredUncond, noisePredText] = [
+                    noise_pred.slice([0, 1]),
+                    noise_pred.slice([1, 2]),
+                    ];
+                    noise_pred = noisePredUncond.add(noisePredText.sub(noisePredUncond).mul(this.guidance_scale));
+                }
+                latents = this.scheduler.step(noise_pred, t, latents);
+
+                const latentsCpuAfter = await tensorData(latents);
+                console.log('after step', t, Math.min(...latentsCpuAfter), Math.max(...latentsCpuAfter));
             }
 
-            // ============ Step 4: VAE Decode (frame by frame) ============
-            log("Step 4: Decoding video frames...");
             start = performance.now();
-            
-            const frames = await this.decode_video_latents(video_latents);
-            
-            perf_info.push(`vae_decoder (${this.num_frames} frames): ${(performance.now() - start).toFixed(1)}ms`);
+            const scaled_latents = latents.div(vae_scaling_factor);
+            const { sample } = await this.models["vae_decoder"].run({ "latent_sample": toOrtTensor(scaled_latents) });
+            perf_info.push(`vae_decoder: ${(performance.now() - start).toFixed(1)}ms`);
 
-            // ============ Step 5: Render Video ============
-            log("Step 5: Rendering video...");
-            await this.render_video(frames);
-
-            // Cleanup
-            cond_hidden.dispose();
-            uncond_hidden.dispose();
-
-            log("Video generation done!");
+            const sampleOrt = toOrtTensor(sample);
+            await this.draw_image(sampleOrt, 0);
             log(perf_info.join(", "));
+            perf_info = [];
+
+            safeDispose(cond_hidden);
+            safeDispose(uncond_hidden);
+
+            log("done");
 
         } catch (error) {
-            log(`Error: ${error.message}`);
-            console.error(error);
+            log(error);
         }
     }
 
-    /**
-     * Decode video latents to pixel frames
-     * @param {ort.Tensor} video_latents - shape [1, 4, num_frames, 64, 64]
-     * @returns {Array<ort.Tensor>} Array of image tensors for each frame
-     */
-    async decode_video_latents(video_latents) {
-        const latentsData = await video_latents.getData();
-        const [batch, channels, num_frames, height, width] = video_latents.dims;
-        
-        const frames = [];
-        const frame_size = channels * height * width;
-
-        // Decode frame by frame
-        for (let f = 0; f < num_frames; f++) {
-            log(`Decoding frame ${f+1}/${num_frames}...`);
+      /**
+       * Tokenizes and encodes the input prompt. Before encoding, we verify if it is necessary
+       * to break the prompt into chunks due to the Tokenizer model limit (which is usually 77)
+       * by getting the maximum length of the input prompt and comparing it with the Tokenizer
+       * model max length. If the prompt exceeds the Tokenizer model limit, then it is
+       * necessary to break the prompt into chunks, otherwise, it is not necessary.
+       * 
+       * @param prompt Input prompt.
+       * @param highestTokenLength Highest token length between prompt and negative prompt or Tokenizer model max length.
+       * @returns Tensor containing the prompt embeddings.
+       */
+      async encodePrompt (prompt, highestTokenLength) {
+        let tokens, encoded, inputIds;
+        const TokenMaxLength = this.tokenizer.model_max_length; // Tokenizer model max length of tokens including the <START> and <END> tokens
+    
+        if(highestTokenLength > TokenMaxLength) { // Prompt exceeds tokenizer model max length, therefore we need to use chunks
+          let embeddingsTensorArray = []; // Will contain all of the prompt token embedding chunks
+          const userTokenMaxLength = TokenMaxLength - 2; // Max length of tokens minus the <START> and <END> tokens
+    
+          tokens = this.tokenizer(
+            prompt,
+            {
+              return_tensor: false,
+              padding: false,
+              max_length: TokenMaxLength,
+              return_tensor_dtype: 'int32',
+            },
+          );
+    
+          inputIds = tokens.input_ids; // Tokenized prompt
+          const START_token = inputIds.shift(); // Remove <START> token
+          const END_token = inputIds.pop(); // Remove <END> token
+    
+          for(let i = 0; i < highestTokenLength; i += userTokenMaxLength) {
+            let tokenChunk = inputIds.slice(i, i + userTokenMaxLength);
             
-            // Extract single frame latent
-            const frame_latent_data = new Float32Array(frame_size);
-            for (let i = 0; i < frame_size; i++) {
-                frame_latent_data[i] = latentsData[f * frame_size + i] / vae_scaling_factor;
+            for(let j = tokenChunk.length; j < userTokenMaxLength; j++) { // Pad chunk to userTokenMaxLength if necessary. Use the <END> token to pad.
+              tokenChunk.push(END_token);
             }
-            
-            const frame_latent = new ort.Tensor(
-                "float32",
-                frame_latent_data,
-                [1, channels, height, width]
-            );
+    
+            tokenChunk.unshift(START_token); // Add <START> token to each chunk
+            tokenChunk.push(END_token); // Add <END> token to each chunk
 
-            // VAE decode
-            const { sample } = await this.models["vae_decoder"].run({ 
-                "latent_sample": frame_latent 
-            });
-            
-            frames.push(sample);
+            encoded = await this.models["text_encoder"].run({ input_ids: new Tensor('int64', toBigInt64Array(tokenChunk.flat()), [1, tokenChunk.length]) });
+            embeddingsTensorArray.push(encoded.last_hidden_state);
+          }
+    
+          return cat(embeddingsTensorArray, 1);
         }
-
-        return frames;
-    }
-
-    /**
-     * Render video to canvas or create video file
-     * @param {Array<ort.Tensor>} frames - Array of video frames
-     */
-    async render_video(frames) {
-        // Option 1: Display all frames to multiple canvases (for preview)
-        for (let i = 0; i < frames.length; i++) {
-            await this.draw_image(frames[i], i);
+        else { // Prompt that does not exceed tokenizer max length. Padding is used.
+          tokens = this.tokenizer(
+            prompt,
+            {
+              return_tensor: false,
+              padding: true,
+              max_length: TokenMaxLength,
+              return_tensor_dtype: 'int32',
+            },
+          );
+    
+          inputIds = tokens.input_ids; // Tokenized prompt
+          encoded = await this.models["text_encoder"].run({ input_ids: new Tensor('int64', toBigInt64Array(inputIds.flat()), [1, inputIds.length]) });
+          return encoded.last_hidden_state;
         }
+      }
 
-        // Option 2: Create video file (requires additional video encoding library like ffmpeg.wasm)
-        // await this.encode_to_video(frames);
+    /**
+     * Returns the prompt and negative prompt text embeddings.
+     * 
+     * @param prompt Input prompt.
+     * @param negativePrompt Input negative prompt.
+     * @returns Tensor containing the prompt and negative prompt embeddings.
+     */
+    async getPromptEmbeds (prompt, negativePrompt) {
+        // We check which has more tokens between the prompt and negative prompt
+        const promptTokens = this.tokenizer(
+            prompt,
+            {
+            return_tensor: false,
+            padding: false,
+            max_length: this.tokenizer.model_max_length,
+            return_tensor_dtype: 'int32',
+            },
+        );
+
+        const negPromptTokens = this.tokenizer(
+            negativePrompt,
+            {
+            return_tensor: false,
+            padding: false,
+            max_length: this.tokenizer.model_max_length,
+            return_tensor_dtype: 'int32',
+            },
+        );
+
+        const promptTokensLength = promptTokens.input_ids.length; // Number of tokens in prompt including the <START> and <END> tokens
+        const negPromptTokensLength = negPromptTokens.input_ids.length; // Number of tokens in negative prompt including the <START> and <END> tokens
+        const highestTokenLength = Math.max(promptTokensLength, negPromptTokensLength);
+
+        const promptEmbeds = await this.encodePrompt(prompt, highestTokenLength);
+        const negativePromptEmbeds = await this.encodePrompt(negativePrompt || '', highestTokenLength);
+
+        return cat([negativePromptEmbeds, promptEmbeds]);
     }
 
     /**
-     * Optional: Encode frames to video file
-     * Requires integration with ffmpeg.wasm or similar library
+     * draw an image from tensor
+     * @param {ort.Tensor} t
+     * @param {number} image_nr
      */
-    async encode_to_video(frames) {
-        log("Video encoding not yet implemented");
-        // TODO: Use ffmpeg.wasm or MediaRecorder API
-        // 1. Create canvas stream
-        // 2. Use MediaRecorder to record
-        // 3. Generate .mp4 or .webm file
-    }
-
-    /**
-     * Draw a single frame to specified canvas
-     * @param {ort.Tensor} frame - Image frame tensor
-     * @param {number} frame_nr - Frame number
-     */
-    async draw_image(frame, frame_nr) {
-        const pix = await frame.getData();
+    async draw_image(t, image_nr) {
+        const pix = await tensorData(t);
         for (let i = 0; i < pix.length; i++) {
             let x = pix[i];
             x = x / 2 + 0.5;
@@ -325,18 +322,71 @@ export class SDT2VModel extends SDModel {
             if (x > 1.) x = 1.;
             pix[i] = x;
         }
-        const tmpTensor = new ort.Tensor('float32', pix, frame.dims);
+        const tmpTensor = new ort.Tensor('float32', pix, getTensorDims(t));
         const imageData = tmpTensor.toImageData({ tensorLayout: 'NCWH', format: 'RGB' });
-        
-        const canvas = document.getElementById(`video_frame_${frame_nr}`);
-        if (canvas) {
-            canvas.width = imageData.width;
-            canvas.height = imageData.height;
-            canvas.getContext('2d').putImageData(imageData, 0, 0);
-            const div = canvas.parentElement;
-            if (div) div.style.opacity = 1.;
-        } else {
-            log(`Warning: canvas video_frame_${frame_nr} not found`);
-        }
+        const canvas = document.getElementById(`img_canvas_${image_nr}`);
+        canvas.width = imageData.width;
+        canvas.height = imageData.height;
+        canvas.getContext('2d').putImageData(imageData, 0, 0);
+        const div = document.getElementById(`img_div_${image_nr}`);
+        div.style.opacity = 1.;
+    }
+}
+
+function getTensorDims(tensor) {
+    if (tensor?.dims) {
+        return tensor.dims.slice();
+    }
+    if (tensor?.shape) {
+        return Array.from(tensor.shape);
+    }
+    return [];
+}
+
+async function tensorData(tensor) {
+    if (!tensor) {
+        return new Float32Array();
+    }
+    if (typeof tensor.getData === 'function') {
+        return await tensor.getData();
+    }
+    if (tensor.data instanceof Float32Array) {
+        return tensor.data;
+    }
+    return Float32Array.from(tensor.data || []);
+}
+
+function toOrtTensor(tensor) {
+    if (tensor instanceof ort.Tensor) {
+        return tensor;
+    }
+    const data = tensor.data instanceof Float32Array ? tensor.data : Float32Array.from(tensor.data);
+    return new ort.Tensor(tensor.type || 'float32', data, getTensorDims(tensor));
+}
+
+async function toXTensor(tensor) {
+    if (tensor instanceof Tensor) {
+        return tensor;
+    }
+    const data = await tensorData(tensor);
+    return new Tensor(tensor.type || 'float32', data.slice ? data : Float32Array.from(data), getTensorDims(tensor));
+}
+
+function getSchedulerTimesteps(scheduler) {
+    if (!scheduler || !scheduler.timesteps) {
+        return [];
+    }
+    if (Array.isArray(scheduler.timesteps)) {
+        return scheduler.timesteps.slice();
+    }
+    if (scheduler.timesteps.data) {
+        return Array.from(scheduler.timesteps.data);
+    }
+    return [];
+}
+
+function safeDispose(tensor) {
+    if (tensor && typeof tensor.dispose === 'function') {
+        tensor.dispose();
     }
 }

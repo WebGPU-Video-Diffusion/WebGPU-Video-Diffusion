@@ -1,6 +1,6 @@
 import * as ort from 'onnxruntime-web/webgpu';
 import { randn_latents, scale_model_inputs, eulera_step, toBigInt64Array, draw_image } from '../utils/common.js';
-import { PNDMScheduler } from '../scheduler/PNDMScheduler.js';
+import { PNDMScheduler } from '../scheduler/PNDM_Simple.js';
 
 ort.env.wasm.numThreads = 1;
 ort.env.wasm.simd = true;
@@ -256,7 +256,7 @@ export class SDModel {
                     const t = this.scheduler.timesteps[i];
 
                     //const latent_model_input = scale_model_inputs(latents);
-                    //TODO: now use scaling
+                    //TODO: now use without scaling
                     const latent_model_input = latents;
 
                     const latentsCpu = await latents.getData();

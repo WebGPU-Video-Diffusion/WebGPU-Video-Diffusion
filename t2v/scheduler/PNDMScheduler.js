@@ -1,74 +1,105 @@
 // PNDMScheduler.js
 
 import ort from 'onnxruntime-web/webgpu';
+import { Tensor } from '@xenova/transformers';
+import { SchedulerBase } from './SchedulerBase.js';
+import { range, cat } from '../util/Tensor.js';
 
+function log(i) { console.log(i); document.getElementById('status').innerText += `\n${i}`; }
 
-const BETAS = new Float32Array([
-  0.0008500000, 0.0008546986, 0.0008594102, 0.0008641348, 0.0008688722, 0.0008736228, 0.0008783862, 0.0008831625, 0.0008879518, 0.0008927541, 0.0008975693, 0.0009023974, 0.0009072385, 0.0009120927, 0.0009169597, 0.0009218397, 0.0009267326, 0.0009316384, 0.0009365572, 0.0009414890, 0.0009464337, 0.0009513915, 0.0009563621, 0.0009613456, 0.0009663422, 0.0009713516, 0.0009763740, 0.0009814096, 0.0009864578, 0.0009915191, 0.0009965933, 0.0010016805, 0.0010067807, 0.0010118936, 0.0010170197, 0.0010221587, 0.0010273106, 0.0010324755, 0.0010376533, 0.0010428440, 0.0010480478, 0.0010532645, 0.0010584943, 0.0010637370, 0.0010689924, 0.0010742609, 0.0010795423, 0.0010848368, 0.0010901440, 0.0010954643, 0.0011007976, 0.0011061438, 0.0011115029, 0.0011168750, 0.0011222600, 0.0011276581, 0.0011330689, 0.0011384931, 0.0011439297, 0.0011493798, 0.0011548424, 0.0011603181, 0.0011658068, 0.0011713085, 0.0011768229, 0.0011823504, 0.0011878909, 0.0011934444, 0.0011990106, 0.0012045900, 0.0012101822, 0.0012157875, 0.0012214056, 0.0012270367, 0.0012326810, 0.0012383377, 0.0012440080, 0.0012496909, 0.0012553867, 0.0012610955, 0.0012668173, 0.0012725521, 0.0012782997, 0.0012840603, 0.0012898339, 0.0012956203, 0.0013014198, 0.0013072323, 0.0013130576, 0.0013188960, 0.0013247472, 0.0013306118, 0.0013364889, 0.0013423790, 0.0013482821, 0.0013541981, 0.0013601271, 0.0013660690, 0.0013720238, 0.0013779917, 0.0013839725, 0.0013899662, 0.0013959729, 0.0014019925, 0.0014080252, 0.0014140706, 0.0014201294, 0.0014262006, 0.0014322853, 0.0014383823, 0.0014444928, 0.0014506161, 0.0014567523, 0.0014629015, 0.0014690636, 0.0014752386, 0.0014814265, 0.0014876275, 0.0014938414, 0.0015000682, 0.0015063081, 0.0015125608, 0.0015188265, 0.0015251054, 0.0015313968, 0.0015377016, 0.0015440191, 0.0015503495, 0.0015566929, 0.0015630493, 0.0015694186, 0.0015758008, 0.0015821961, 0.0015886042, 0.0015950253, 0.0016014593, 0.0016079064, 0.0016143663, 0.0016208392, 0.0016273251, 0.0016338242, 0.0016403357, 0.0016468607, 0.0016533984, 0.0016599490, 0.0016665126, 0.0016730891, 0.0016796786, 0.0016862809, 0.0016928964, 0.0016995247, 0.0017061660, 0.0017128201, 0.0017194874, 0.0017261675, 0.0017328609, 0.0017395666, 0.0017462858, 0.0017530175, 0.0017597626, 0.0017665206, 0.0017732913, 0.0017800750, 0.0017868717, 0.0017936814, 0.0018005039, 0.0018073395, 0.0018141880, 0.0018210494, 0.0018279238, 0.0018348112, 0.0018417115, 0.0018486250, 0.0018555509, 0.0018624903, 0.0018694421, 0.0018764074, 0.0018833855, 0.0018903764, 0.0018973803, 0.0019043972, 0.0019114270, 0.0019184697, 0.0019255254, 0.0019325941, 0.0019396757, 0.0019467702, 0.0019538777, 0.0019609982, 0.0019681319, 0.0019752779, 0.0019824377, 0.0019896096, 0.0019967949, 0.0020039931, 0.0020112044, 0.0020184284, 0.0020256655, 0.0020329154, 0.0020401783, 0.0020474542, 0.0020547430, 0.0020620448, 0.0020693594, 0.0020766875, 0.0020840277, 0.0020913817, 0.0020987478, 0.0021061276, 0.0021135197, 0.0021209253, 0.0021283438, 0.0021357751, 0.0021432193, 0.0021506764, 0.0021581466, 0.0021656298, 0.0021731257, 0.0021806348, 0.0021881571, 0.0021956915, 0.0022032396, 0.0022108001, 0.0022183743, 0.0022259606, 0.0022335604, 0.0022411728, 0.0022487987, 0.0022564372, 0.0022640887, 0.0022717530, 0.0022794304, 0.0022871206, 0.0022948240, 0.0023025400, 0.0023102693, 0.0023180116, 0.0023257665, 0.0023335346, 0.0023413154, 0.0023491096, 0.0023569160, 0.0023647363, 0.0023725687, 0.0023804146, 0.0023882734, 0.0023961449, 0.0024040295, 0.0024119271, 0.0024198375, 0.0024277610, 0.0024356972, 0.0024436465, 0.0024516091, 0.0024595840, 0.0024675727, 0.0024755732, 0.0024835877, 0.0024916143, 0.0024996547, 0.0025077073, 0.0025157735, 0.0025238523, 0.0025319441, 0.0025400489, 0.0025481666, 0.0025562972, 0.0025644407, 0.0025725972, 0.0025807668, 0.0025889496, 0.0025971446, 0.0026053532, 0.0026135740, 0.0026218088, 0.0026300556, 0.0026383160, 0.0026465892, 0.0026548752, 0.0026631742, 0.0026714862, 0.0026798111, 0.0026881488, 0.0026964997, 0.0027048634, 0.0027132405, 0.0027216298, 0.0027300327, 0.0027384479, 0.0027468768, 0.0027553178, 0.0027637726, 0.0027722395, 0.0027807201, 0.0027892136, 0.0027977196, 0.0028062388, 0.0028147709, 0.0028233160, 0.0028318739, 0.0028404449, 0.0028490289, 0.0028576262, 0.0028662356, 0.0028748587, 0.0028834939, 0.0028921431, 0.0029008042, 0.0029094792, 0.0029181663, 0.0029268672, 0.0029355807, 0.0029443069, 0.0029530462, 0.0029617986, 0.0029705637, 0.0029793419, 0.0029881331, 0.0029969371, 0.0030057544, 0.0030145841, 0.0030234274, 0.0030322829, 0.0030411521, 0.0030500335, 0.0030589285, 0.0030678359, 0.0030767568, 0.0030856906, 0.0030946371, 0.0031035966, 0.0031125690, 0.0031215544, 0.0031305526, 0.0031395641, 0.0031485881, 0.0031576259, 0.0031666756, 0.0031757390, 0.0031848147, 0.0031939039, 0.0032030055, 0.0032121208, 0.0032212487, 0.0032303894, 0.0032395432, 0.0032487100, 0.0032578895, 0.0032670822, 0.0032762878, 0.0032855063, 0.0032947380, 0.0033039821, 0.0033132399, 0.0033225098, 0.0033317935, 0.0033410892, 0.0033503987, 0.0033597203, 0.0033690559, 0.0033784038, 0.0033877648, 0.0033971388, 0.0034065256, 0.0034159254, 0.0034253383, 0.0034347640, 0.0034442027, 0.0034536547, 0.0034631188, 0.0034725966, 0.0034820868, 0.0034915907, 0.0035011065, 0.0035106363, 0.0035201781, 0.0035297337, 0.0035393019, 0.0035488831, 0.0035584772, 0.0035680842, 0.0035777041, 0.0035873372, 0.0035969829, 0.0036066419, 0.0036163141, 0.0036259983, 0.0036356964, 0.0036454066, 0.0036551307, 0.0036648673, 0.0036746166, 0.0036843792, 0.0036941546, 0.0037039428, 0.0037137442, 0.0037235583, 0.0037333856, 0.0037432257, 0.0037530789, 0.0037629448, 0.0037728238, 0.0037827159, 0.0037926207, 0.0038025386, 0.0038124698, 0.0038224135, 0.0038323703, 0.0038423399, 0.0038523225, 0.0038623181, 0.0038723266, 0.0038823481, 0.0038923824, 0.0039024297, 0.0039124903, 0.0039225630, 0.0039326488, 0.0039427485, 0.0039528613, 0.0039629857, 0.0039731232, 0.0039832755, 0.0039934390, 0.0040036156, 0.0040138057, 0.0040240092, 0.0040342244, 0.0040444527, 0.0040546944, 0.0040649497, 0.0040752166, 0.0040854965, 0.0040957904, 0.0041060974, 0.0041164164, 0.0041267481, 0.0041370937, 0.0041474523, 0.0041578230, 0.0041682078, 0.0041786050, 0.0041890144, 0.0041994369, 0.0042098733, 0.0042203227, 0.0042307843, 0.0042412584, 0.0042517465, 0.0042622476, 0.0042727608, 0.0042832866, 0.0042938269, 0.0043043797, 0.0043149446, 0.0043255235, 0.0043361150, 0.0043467190, 0.0043573356, 0.0043679662, 0.0043786098, 0.0043892656, 0.0043999339, 0.0044106161, 0.0044213119, 0.0044320193, 0.0044427393, 0.0044534737, 0.0044642207, 0.0044749798, 0.0044857520, 0.0044965390, 0.0045073372, 0.0045181480, 0.0045289728, 0.0045398111, 0.0045506605, 0.0045615234, 0.0045724004, 0.0045832898, 0.0045941914, 0.0046051061, 0.0046160347, 0.0046269759, 0.0046379291, 0.0046488959, 0.0046598762, 0.0046708696, 0.0046818745, 0.0046928939, 0.0047039259, 0.0047149700, 0.0047260271, 0.0047370978, 0.0047481819, 0.0047592777, 0.0047703865, 0.0047815093, 0.0047926451, 0.0048037926, 0.0048149535, 0.0048261280, 0.0048373155, 0.0048485151, 0.0048597273, 0.0048709540, 0.0048821932, 0.0048934445, 0.0049047088, 0.0049159867, 0.0049272780, 0.0049385810, 0.0049498980, 0.0049612280, 0.0049725701, 0.0049839248, 0.0049952939, 0.0050066756, 0.0050180694, 0.0050294758, 0.0050408966, 0.0050523304, 0.0050637759, 0.0050752345, 0.0050867070, 0.0050981920, 0.0051096897, 0.0051211999, 0.0051327241, 0.0051442613, 0.0051558106, 0.0051673735, 0.0051789498, 0.0051905378, 0.0052021383, 0.0052137533, 0.0052253813, 0.0052370210, 0.0052486737, 0.0052603409, 0.0052720201, 0.0052837119, 0.0052954163, 0.0053071352, 0.0053188666, 0.0053306101, 0.0053423671, 0.0053541376, 0.0053659198, 0.0053777150, 0.0053895242, 0.0054013464, 0.0054131807, 0.0054250276, 0.0054368884, 0.0054487623, 0.0054606483, 0.0054725469, 0.0054844599, 0.0054963855, 0.0055083232, 0.0055202739, 0.0055322396, 0.0055442159, 0.0055562058, 0.0055682091, 0.0055802255, 0.0055922540, 0.0056042951, 0.0056163501, 0.0056284186, 0.0056404988, 0.0056525916, 0.0056646988, 0.0056768190, 0.0056889509, 0.0057010953, 0.0057132547, 0.0057254261, 0.0057376102, 0.0057498077, 0.0057620183, 0.0057742409, 0.0057864767, 0.0057987259, 0.0058109886, 0.0058232630, 0.0058355504, 0.0058478517, 0.0058601657, 0.0058724922, 0.0058848313, 0.0058971844, 0.0059095505, 0.0059219282, 0.0059343204, 0.0059467256, 0.0059591420, 0.0059715719, 0.0059840158, 0.0059964727, 0.0060089412, 0.0060214228, 0.0060339184, 0.0060464269, 0.0060589472, 0.0060714809, 0.0060840282, 0.0060965884, 0.0061091608, 0.0061217458, 0.0061343452, 0.0061469572, 0.0061595812, 0.0061722193, 0.0061848704, 0.0061975336, 0.0062102093, 0.0062228991, 0.0062356018, 0.0062483167, 0.0062610442, 0.0062737861, 0.0062865405, 0.0062993071, 0.0063120876, 0.0063248798, 0.0063376864, 0.0063505047, 0.0063633369, 0.0063761813, 0.0063890396, 0.0064019095, 0.0064147939, 0.0064276909, 0.0064405999, 0.0064535215, 0.0064664576, 0.0064794067, 0.0064923675, 0.0065053422, 0.0065183286, 0.0065313294, 0.0065443423, 0.0065573687, 0.0065704072, 0.0065834597, 0.0065965238, 0.0066096024, 0.0066226940, 0.0066357972, 0.0066489130, 0.0066620433, 0.0066751866, 0.0066883415, 0.0067015095, 0.0067146914, 0.0067278864, 0.0067410935, 0.0067543141, 0.0067675468, 0.0067807939, 0.0067940522, 0.0068073249, 0.0068206093, 0.0068339081, 0.0068472186, 0.0068605430, 0.0068738805, 0.0068872296, 0.0069005918, 0.0069139684, 0.0069273575, 0.0069407583, 0.0069541736, 0.0069676004, 0.0069810417, 0.0069944947, 0.0070079616, 0.0070214402, 0.0070349332, 0.0070484378, 0.0070619565, 0.0070754886, 0.0070890319, 0.0071025882, 0.0071161590, 0.0071297423, 0.0071433377, 0.0071569458, 0.0071705682, 0.0071842037, 0.0071978508, 0.0072115120, 0.0072251852, 0.0072388723, 0.0072525712, 0.0072662844, 0.0072800103, 0.0072937477, 0.0073074987, 0.0073212637, 0.0073350412, 0.0073488308, 0.0073626335, 0.0073764501, 0.0073902798, 0.0074041211, 0.0074179764, 0.0074318438, 0.0074457251, 0.0074596182, 0.0074735256, 0.0074874447, 0.0075013782, 0.0075153229, 0.0075292820, 0.0075432542, 0.0075572380, 0.0075712348, 0.0075852457, 0.0075992695, 0.0076133050, 0.0076273549, 0.0076414165, 0.0076554921, 0.0076695797, 0.0076836813, 0.0076977946, 0.0077119218, 0.0077260612, 0.0077402145, 0.0077543808, 0.0077685593, 0.0077827498, 0.0077969553, 0.0078111733, 0.0078254035, 0.0078396462, 0.0078539029, 0.0078681735, 0.0078824544, 0.0078967502, 0.0079110581, 0.0079253800, 0.0079397131, 0.0079540610, 0.0079684202, 0.0079827942, 0.0079971794, 0.0080115786, 0.0080259917, 0.0080404151, 0.0080548525, 0.0080693038, 0.0080837682, 0.0080982437, 0.0081127342, 0.0081272358, 0.0081417523, 0.0081562800, 0.0081708217, 0.0081853755, 0.0081999432, 0.0082145222, 0.0082291160, 0.0082437228, 0.0082583418, 0.0082729729, 0.0082876179, 0.0083022770, 0.0083169471, 0.0083316313, 0.0083463276, 0.0083610378, 0.0083757602, 0.0083904956, 0.0084052440, 0.0084200064, 0.0084347799, 0.0084495675, 0.0084643690, 0.0084791817, 0.0084940074, 0.0085088471, 0.0085236998, 0.0085385637, 0.0085534416, 0.0085683335, 0.0085832374, 0.0085981535, 0.0086130844, 0.0086280266, 0.0086429827, 0.0086579509, 0.0086729331, 0.0086879274, 0.0087029357, 0.0087179551, 0.0087329894, 0.0087480368, 0.0087630954, 0.0087781670, 0.0087932525, 0.0088083511, 0.0088234618, 0.0088385865, 0.0088537233, 0.0088688741, 0.0088840360, 0.0088992128, 0.0089144008, 0.0089296028, 0.0089448169, 0.0089600459, 0.0089752860, 0.0089905402, 0.0090058055, 0.0090210857, 0.0090363789, 0.0090516843, 0.0090670027, 0.0090823332, 0.0090976786, 0.0091130352, 0.0091284057, 0.0091437884, 0.0091591850, 0.0091745937, 0.0091900164, 0.0092054503, 0.0092208991, 0.0092363590, 0.0092518339, 0.0092673209, 0.0092828199, 0.0092983330, 0.0093138581, 0.0093293972, 0.0093449485, 0.0093605136, 0.0093760900, 0.0093916813, 0.0094072837, 0.0094229002, 0.0094385287, 0.0094541721, 0.0094698258, 0.0094854953, 0.0095011769, 0.0095168697, 0.0095325755, 0.0095482962, 0.0095640300, 0.0095797749, 0.0095955348, 0.0096113058, 0.0096270908, 0.0096428879, 0.0096586989, 0.0096745212, 0.0096903583, 0.0097062076, 0.0097220698, 0.0097379452, 0.0097538335, 0.0097697340, 0.0097856494, 0.0098015768, 0.0098175164, 0.0098334700, 0.0098494347, 0.0098654144, 0.0098814052, 0.0098974109, 0.0099134278, 0.0099294595, 0.0099455025, 0.0099615594, 0.0099776285, 0.0099937115, 0.0100098066, 0.0100259157, 0.0100420369, 0.0100581711, 0.0100743175, 0.0100904787, 0.0101066520, 0.0101228375, 0.0101390369, 0.0101552485, 0.0101714740, 0.0101877116, 0.0102039631, 0.0102202259, 0.0102365036, 0.0102527924, 0.0102690952, 0.0102854120, 0.0103017399, 0.0103180809, 0.0103344359, 0.0103508038, 0.0103671830, 0.0103835771, 0.0103999833, 0.0104164025, 0.0104328338, 0.0104492800, 0.0104657374, 0.0104822088, 0.0104986923, 0.0105151897, 0.0105316993, 0.0105482228, 0.0105647575, 0.0105813071, 0.0105978698, 0.0106144436, 0.0106310314, 0.0106476313, 0.0106642451, 0.0106808711, 0.0106975110, 0.0107141631, 0.0107308291, 0.0107475063, 0.0107641984, 0.0107809016, 0.0107976189, 0.0108143482, 0.0108310925, 0.0108478488, 0.0108646173, 0.0108813997, 0.0108981933, 0.0109150019, 0.0109318215, 0.0109486561, 0.0109655019, 0.0109823626, 0.0109992344, 0.0110161202, 0.0110330181, 0.0110499300, 0.0110668531, 0.0110837910, 0.0111007411, 0.0111177051, 0.0111346804, 0.0111516695, 0.0111686727, 0.0111856870, 0.0112027153, 0.0112197557, 0.0112368101, 0.0112538757, 0.0112709561, 0.0112880487, 0.0113051543, 0.0113222720, 0.0113394046, 0.0113565484, 0.0113737062, 0.0113908760, 0.0114080599, 0.0114252567, 0.0114424657, 0.0114596887, 0.0114769228, 0.0114941718, 0.0115114320, 0.0115287062, 0.0115459925, 0.0115632936, 0.0115806051, 0.0115979314, 0.0116152698, 0.0116326222, 0.0116499858, 0.0116673643, 0.0116847539, 0.0117021585, 0.0117195752, 0.0117370039, 0.0117544476, 0.0117719015, 0.0117893703, 0.0118068513, 0.0118243461, 0.0118418522, 0.0118593732, 0.0118769053, 0.0118944515, 0.0119120097, 0.0119295828, 0.0119471662, 0.0119647654, 0.0119823748,
-]);
-
-export class PNDMScheduler {
+export class PNDMScheduler extends SchedulerBase {
   constructor(config = {}) {
-    this.beta_start = config.beta_start ?? 0.00085;
-    this.beta_end = config.beta_end ?? 0.012;
-    this.beta_schedule = config.beta_schedule ?? "scaled_linear";
+    super(config);
     this.skip_prk_steps = config.skip_prk_steps ?? true;
-    this.prediction_type = config.prediction_type ?? "epsilon";
-    this.final_alpha_cumprod = config.final_alpha_cumprod ?? 1e-3;
-    this.steps_offset = config.steps_offset ?? 0;
-
-    
-    this.betas = BETAS;
-    this.num_train_timesteps = this.betas.length; // 1000
-
-    const alphas = new Float32Array(this.num_train_timesteps);
-    const alphas_cumprod = new Float32Array(this.num_train_timesteps);
-    for (let i = 0; i < this.num_train_timesteps; i++) {
-      alphas[i] = 1 - this.betas[i];
-      alphas_cumprod[i] = i === 0 ? alphas[i] : alphas_cumprod[i - 1] * alphas[i];
-    }
-    this.alphas_cumprod = alphas_cumprod;
-
+    this.prediction_type = this.config.prediction_type;
     this.initNoiseSigma = 1.0;
     this.pndmOrder = 4;
 
-    
-    this.num_inference_steps = null;
+    this.num_inference_steps = 0;
     this.timesteps = [];
     this.prk_timesteps = [];
     this.plms_timesteps = [];
     this.ets = [];
     this.counter = 0;
-    this.cur_sample = null;
+    this.cur_model_output = null;
+    this._step_ratio = 1;
   }
 
   setTimesteps(num_inference_steps) {
-    if (num_inference_steps !== 30) {
-      throw new Error("Only 20 inference steps supported in this demo");
-    }
-
     this.num_inference_steps = num_inference_steps;
-
-  
-    const timesteps = [
-        958, 925, 925, 892, 859, 826, 793, 760, 727, 694, 
-        661, 628, 595, 562, 529, 496, 463, 430, 397, 364, 
-        331, 298, 265, 232, 199, 166, 133, 100, 67,  34
-    ];
-
-    this.skip_prk_steps = true;
-    this.prk_timesteps = [];          
-    this.plms_timesteps = timesteps.slice();
-    this.timesteps = timesteps.slice();
+    const stepRatio = ~~(this.config.num_train_timesteps / this.num_inference_steps);
+    this.timesteps = range(0, num_inference_steps).mul(stepRatio).round();
+    this.timesteps = this.timesteps.add(this.config.steps_offset);
+    // const fixed_timesteps = [
+    //     958, 925, 925, 892, 859, 826, 793, 760, 727, 694, 
+    //     661, 628, 595, 562, 529, 496, 463, 430, 397, 364, 
+    //     331, 298, 265, 232, 199, 166, 133, 100, 67,  34
+    // ];
+    // fixed_timesteps.reverse();
+    // log(`fixed timesteps: ${fixed_timesteps}`);
+    
+    if (this.skip_prk_steps) {
+      this.prkTimesteps = new Tensor(new Int32Array());
+      const size = this.timesteps.size;
+      this.plmsTimesteps = cat([
+        this.timesteps.slice([1, size - 1]),
+        this.timesteps.slice([size - 2, size - 1]),
+        this.timesteps.slice([size - 1, size]),
+      ]).reverse().clone();
+      this.timesteps = this.plmsTimesteps;
+      log(`PNDM timesteps: ${this.timesteps.data}`);
+    } else {
+      const prkTimesteps = this.timesteps.slice(-this.pndmOrder)
+        .tile([2])
+        .add(
+          // tf.tensor([0, this.config.num_train_timesteps / numInferenceSteps / 2]).tile([this.pndmOrder])
+        );
+      this.prk_timesteps = prkTimesteps.slice(0, -1).tile([2]).slice(1, -1).reverse().clone();
+      this.plms_timesteps = this.timesteps.slice(0, -3).reverse().clone();
+      this.timesteps = cat([this.prk_timesteps, this.plms_timesteps]);
+    }
 
     this.ets = [];
     this.counter = 0;
-    this.cur_sample = null;
+    this.cur_model_output = null;
   }
 
   step(model_output, timestep, sample) {
-    
-    return this._step_plms(model_output, timestep, sample);
+    if (!this.skip_prk_steps && this.counter < this.prk_timesteps.dims[0]) {
+      return this._step_prk(model_output, timestep, sample);
+    } else {
+      return this._step_plms(model_output, timestep, sample);
+    }
+  }
+
+  _step_prk(model_output, timestep, sample) {
+    if (this.num_inference_steps == null) {
+      throw new Error("num_inference_steps is null. Call setTimesteps() first.");
+    }
+
+    const halfStep = Math.floor(this.num_train_timesteps / this.num_inference_steps / 2);
+    const diff_to_prev = this.counter % 2 === 0 ? halfStep : 0;
+    const prev_timestep = timestep - diff_to_prev;
+    const bucketIndex = Math.floor(this.counter / 4) * 4;
+    timestep = this.prk_timesteps[bucketIndex];
+
+    if (this.counter % 4 === 0) {
+      this.cur_model_output = this._weightedAdd(this.cur_model_output, model_output, 1 / 6);
+      this.ets.push(this._cloneTensor(model_output));
+      this.cur_sample = this._cloneTensor(sample);
+    } else if ((this.counter - 1) % 4 === 0) {
+      this.cur_model_output = this._weightedAdd(this.cur_model_output, model_output, 1 / 3);
+    } else if ((this.counter - 2) % 4 === 0) {
+      this.cur_model_output = this._weightedAdd(this.cur_model_output, model_output, 1 / 3);
+    } else if ((this.counter - 3) % 4 === 0) {
+      model_output = this._weightedAdd(this.cur_model_output, model_output, 1 / 6);
+      this.cur_model_output = null;
+    }
+
+    const current_sample = this.cur_sample ?? sample;
+    const prev_sample = this._get_prev_sample(current_sample, timestep, prev_timestep, model_output);
+    this.counter += 1;
+    return prev_sample;
   }
 
   _step_plms(model_output, timestep, sample) {
@@ -76,7 +107,7 @@ export class PNDMScheduler {
       throw new Error("num_inference_steps is null. Call setTimesteps() first.");
     }
 
-    const dt = Math.floor(this.num_train_timesteps / this.num_inference_steps); // 1000/20=50
+    const dt = ~~(this.num_train_timesteps / this.num_inference_steps);
     let prev_timestep = timestep - dt;
 
     if (this.counter !== 1) {
@@ -89,21 +120,11 @@ export class PNDMScheduler {
       timestep = timestep + dt;
     }
 
-    
     if (this.ets.length === 1 && this.counter === 0) {
-      
-      this.cur_sample = this._cloneTensor(sample);
-      
+      this.cur_sample = sample;
     } else if (this.ets.length === 1 && this.counter === 1) {
-      
       const last = this.ets[this.ets.length - 1];
-      const a = model_output.data;
-      const b = last.data;
-      const out = new Float32Array(a.length);
-      for (let i = 0; i < out.length; i++) {
-        out[i] = (a[i] + b[i]) * 0.5;
-      }
-      model_output = new ort.Tensor("float32", out, model_output.dims);
+      model_output = model_output.add(last).div(2);
 
       if (this.cur_sample == null) {
         throw new Error("cur_sample is null in _step_plms");
@@ -111,33 +132,28 @@ export class PNDMScheduler {
       sample = this.cur_sample;
       this.cur_sample = null;
     } else if (this.ets.length === 2) {
-      const e1 = this.ets[this.ets.length - 1].data;
-      const e2 = this.ets[this.ets.length - 2].data;
-      const out = new Float32Array(model_output.data.length);
-      for (let i = 0; i < out.length; i++) {
-        out[i] = (3 * e1[i] - e2[i]) / 2;
-      }
-      model_output = new ort.Tensor("float32", out, model_output.dims);
+      const e1 = this.ets[this.ets.length - 1];
+      const e2 = this.ets[this.ets.length - 2];
+      model_output = e1.mul(3).sub(e2).div(2);
     } else if (this.ets.length === 3) {
-      const e1 = this.ets[this.ets.length - 1].data;
-      const e2 = this.ets[this.ets.length - 2].data;
-      const e3 = this.ets[this.ets.length - 3].data;
-      const out = new Float32Array(model_output.data.length);
-      for (let i = 0; i < out.length; i++) {
-        out[i] = (23 * e1[i] - 16 * e2[i] + 5 * e3[i]) / 12;
-      }
-      model_output = new ort.Tensor("float32", out, model_output.dims);
+      const e1 = this.ets[this.ets.length - 1];
+      const e2 = this.ets[this.ets.length - 2];
+      const e3 = this.ets[this.ets.length - 3];
+      model_output = e1.mul(23)
+        .sub(e2.mul(16))
+        .add(e3.mul(5))
+        .div(12);
     } else {
       const n = this.ets.length;
-      const e1 = this.ets[n - 1].data;
-      const e2 = this.ets[n - 2].data;
-      const e3 = this.ets[n - 3].data;
-      const e4 = this.ets[n - 4].data;
-      const out = new Float32Array(model_output.data.length);
-      for (let i = 0; i < out.length; i++) {
-        out[i] = (55 * e1[i] - 59 * e2[i] + 37 * e3[i] - 9 * e4[i]) / 24;
-      }
-      model_output = new ort.Tensor("float32", out, model_output.dims);
+      const e1 = this.ets[n - 1];
+      const e2 = this.ets[n - 2];
+      const e3 = this.ets[n - 3];
+      const e4 = this.ets[n - 4];
+      model_output = e1.mul(55)
+        .sub(e2.mul(59))
+        .add(e3.mul(37))
+        .sub(e4.mul(9))
+        .mul(1 / 24);
     }
 
     const prev_sample = this._get_prev_sample(sample, timestep, prev_timestep, model_output);
@@ -148,18 +164,19 @@ export class PNDMScheduler {
   _get_prev_sample(sample, timestep, prev_timestep, model_output) {
     const tIdx = Math.round(timestep);
     const tPrevIdx = Math.round(prev_timestep);
+    const alphaData = this.alphas_cumprod.data;
 
-    if (tIdx < 0 || tIdx >= this.alphas_cumprod.length) {
+    if (tIdx < 0 || tIdx >= alphaData.length) {
       throw new Error(`timestep index out of range: ${tIdx}`);
     }
-    const alpha_prod_t = this.alphas_cumprod[tIdx];
+    const alpha_prod_t = alphaData[tIdx];
 
     let alpha_prod_t_prev;
     if (prev_timestep >= 0) {
-      if (tPrevIdx < 0 || tPrevIdx >= this.alphas_cumprod.length) {
+      if (tPrevIdx < 0 || tPrevIdx >= alphaData.length) {
         throw new Error(`prev_timestep index out of range: ${tPrevIdx}`);
       }
-      alpha_prod_t_prev = this.alphas_cumprod[tPrevIdx];
+      alpha_prod_t_prev = alphaData[tPrevIdx];
     } else {
       alpha_prod_t_prev = this.final_alpha_cumprod;
     }
@@ -167,15 +184,11 @@ export class PNDMScheduler {
     const beta_prod_t = 1 - alpha_prod_t;
     const beta_prod_t_prev = 1 - alpha_prod_t_prev;
 
+    let adjusted_model_output = model_output;
     if (this.prediction_type === "v_prediction") {
       const sqrt_alpha_prod_t = Math.sqrt(alpha_prod_t);
       const sqrt_beta_prod_t = Math.sqrt(beta_prod_t);
-      const data = model_output.data;
-      const x = sample.data;
-      for (let i = 0; i < data.length; i++) {
-        const v = data[i];
-        data[i] = sqrt_alpha_prod_t * v + sqrt_beta_prod_t * x[i];
-      }
+      adjusted_model_output = model_output.mul(sqrt_alpha_prod_t).add(sample.mul(sqrt_beta_prod_t));
     } else if (this.prediction_type !== "epsilon") {
       throw new Error(
         `prediction_type given as ${this.prediction_type} must be 'epsilon' or 'v_prediction'`
@@ -192,21 +205,43 @@ export class PNDMScheduler {
       throw new Error(`model_output_denom_coeff is invalid: ${denom}`);
     }
 
-    const out = new Float32Array(sample.data.length);
-    const sdata = sample.data;
-    const mdata = model_output.data;
-    for (let i = 0; i < out.length; i++) {
-      const x = sdata[i];
-      const e = mdata[i];
-      out[i] = sample_coeff * x - (alpha_prod_t_prev - alpha_prod_t) * e / denom;
-    }
-
-    return new ort.Tensor("float32", out, sample.dims);
+    const coeff = (alpha_prod_t_prev - alpha_prod_t) / denom;
+    return sample.mul(sample_coeff).sub(adjusted_model_output.mul(coeff));
   }
 
   _cloneTensor(t) {
-    const data = new Float32Array(t.data.length);
-    data.set(t.data);
-    return new ort.Tensor("float32", data, t.dims.slice());
+    if (t == null) {
+      return null;
+    }
+    const data = t.data instanceof Float32Array ? t.data.slice() : Float32Array.from(t.data);
+    return new Tensor(t.type || "float32", data, t.dims.slice());
+  }
+
+  _weightedAdd(target, tensor, weight) {
+    const contribution = tensor.mul(weight);
+    if (target == null) {
+      return contribution;
+    }
+    return target.add(contribution);
+  }
+
+  _ensureTensor(value) {
+    if (value instanceof Tensor) {
+      return value;
+    }
+    if (!value || !value.data || !value.dims) {
+      throw new Error('Invalid tensor-like input provided to scheduler.');
+    }
+    const type = value.type || 'float32';
+    const data = value.data instanceof Float32Array ? value.data.slice() : Float32Array.from(value.data);
+    return new Tensor(type, data, value.dims.slice());
+  }
+
+  _toOrtTensor(tensor) {
+    if (!(tensor instanceof Tensor)) {
+      return tensor;
+    }
+    const data = tensor.data instanceof Float32Array ? tensor.data.slice() : Float32Array.from(tensor.data);
+    return new ort.Tensor(tensor.type || 'float32', data, tensor.dims.slice());
   }
 }

@@ -1,6 +1,7 @@
 
 import ort from 'onnxruntime-web/webgpu';
-import { SDModel } from './models/sd.js';
+//import { SDModel } from './models/sd.js';
+import { SDModel } from './models/sd_t2v.js';
 import {draw_image} from './utils/common.js';
 
 function log(i) { console.log(i); document.getElementById('status').innerText += `\n${i}`; }
@@ -23,7 +24,7 @@ function getConfig() {
         local: 0,
         intType: "int64",
         floatType: "float32",
-        batchSize: "4",
+        batchSize: "1",
     };
     let vars = query.split("&");
     for (var i = 0; i < vars.length; i++) {
