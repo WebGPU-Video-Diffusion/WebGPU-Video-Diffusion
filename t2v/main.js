@@ -8,6 +8,20 @@ function log(i) { console.log(i); document.getElementById('status').innerText +=
 
 const text = document.getElementById("user-input");
 
+function toBoolean(value) {
+    if (typeof value === 'boolean') {
+        return value;
+    }
+    if (typeof value === 'number') {
+        return value !== 0;
+    }
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        return normalized === '1' || normalized === 'true' || normalized === 'yes';
+    }
+    return Boolean(value);
+}
+
 function getConfig() {
     const query = window.location.search.substring(1);
     var config = {
@@ -16,6 +30,7 @@ function getConfig() {
         //model: "onnx-community/stable-diffusion-v1-5-ONNX",
         //model: "tlwu/stable-diffusion-v1-5-onnxruntime",
         model: "ykeee/StableDiffusion1.5-fp32",
+        local_model: "sd1.5/t2vzero-fp32",
         provider: "webgpu",
         device: "gpu",
         threads: "1",
@@ -24,7 +39,7 @@ function getConfig() {
         local: 0,
         intType: "int64",
         floatType: "float32",
-        batchSize: "2",
+        batchSize: "1",
     };
     let vars = query.split("&");
     for (var i = 0; i < vars.length; i++) {
@@ -37,6 +52,8 @@ function getConfig() {
     }
     config.threads = parseInt(config.threads);
     config.batchSize = parseInt(config.batchSize);
+    config.local = toBoolean(config.local);
+    config.verbose = parseInt(config.verbose) || 0;
     return config;
 }
 
@@ -46,14 +63,18 @@ const models = {
     "unet": {
         url: "unet",
         externaldata: true,
+        extfilename: 2, // 1 = model.onnx_data, 2 = weights.pb
+        local: true,
     },
     "text_encoder": {
         url: "text_encoder",
         externaldata: false,
+        local: false
     },
     "vae_decoder": {
         url: "vae_decoder",
         externaldata: false,
+        local: false
     }
 }
 
@@ -69,6 +90,7 @@ async function Init(hasFP16) {
         verbose: config.verbose,
         local: config.local,
         hasFP16: hasFP16,
+        base_model_local: config.local_model
     });
     log("Ready.");
   } catch (error) {

@@ -155,11 +155,18 @@ export class SDModel {
         const models = options.models;
         const provider = options.provider || "webgpu";
         const verbose = options.verbose;
-        const local = options.local;
+        const isLocal = options.local === true || options.local === 1 || options.local === '1' || options.local === 'true';
         const hasFP16 = (provider === "wasm") ? false : options.hasFP16;
         this.profiler = options.profiler;
         for (const [name, model] of Object.entries(models)) {
-            const model_path = (local) ? "models/" + base_model : "https://huggingface.co/" + base_model + "/resolve/main/" + model.url;
+            const useLocal = model.local ?? isLocal;
+            const localBase = model.localBase ?? base_model;
+            const remoteBase = model.remoteBase ?? base_model;
+            const localUrl = model.localUrl ?? model.url;
+            const remoteUrl = model.remoteUrl ?? model.url;
+            const basePath = useLocal ? `models/${localBase}` : `https://huggingface.co/${remoteBase}/resolve/main`;
+            const relativePath = useLocal ? localUrl : remoteUrl;
+            const model_path = `${basePath}/${relativePath}`;
 
             log(`loading... ${name},  ${provider}`);
             const json_bytes = await fetchAndCache(model_path + "/config.json");

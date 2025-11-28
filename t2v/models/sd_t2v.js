@@ -56,7 +56,7 @@ export class SDModel {
         this.models = {"unet": {}, "text_encoder": {}, "vae_decoder": {}};
         this.init_tokenizer();
         this.negativePrompt = "blurry, low quality, bad anatomy";
-        this.guidance_scale = 1;
+        this.guidance_scale = 7.5;
         // Batch size for parallel image generation
         this.batch_size = modelConfig.batchSize || 1;
         // TODO: for now we use fixed config
@@ -78,13 +78,17 @@ export class SDModel {
 
     async load(base_model, options) {
         const models = options.models;
+        const base_model_local = options.base_model_local; 
         const provider = options.provider || "webgpu";
         const verbose = options.verbose;
-        const local = options.local;
+        const isLocal = options.local === true || options.local === 1 || options.local === '1' || options.local === 'true';
         const hasFP16 = (provider === "wasm") ? false : options.hasFP16;
         this.profiler = options.profiler;
         for (const [name, model] of Object.entries(models)) {
-            const model_path = (local) ? "models/" + base_model : "https://huggingface.co/" + base_model + "/resolve/main/" + model.url;
+            const useLocal = model.local ?? isLocal;
+            const remoteBase = model.remoteBase ?? base_model;
+            const basePath = useLocal ? `${base_model_local}` : `https://huggingface.co/${remoteBase}/resolve/main`;
+            const model_path = `${basePath}/${model.url}`;
 
             log(`loading... ${name},  ${provider}`);
             const json_bytes = await fetchAndCache(model_path + "/config.json");
@@ -93,10 +97,12 @@ export class SDModel {
 
             let modelSource;
             let externaldata;
+            let extpath;
 
             if (model.externaldata) {
                 modelSource = model_path + "/model.onnx";
-                externaldata = model_path + "/model.onnx_data";
+                externaldata = model.extfilename === 1 ? model_path + "/model.onnx_data" : model_path + "/weights.pb";
+                extpath = model.extfilename === 1 ? "model.onnx_data" : "weights.pb";
                 log(`model ${name} uses external data; loading directly from path`);
             } else {
                 modelSource = await fetchAndCache(model_path + "/model.onnx");
@@ -113,7 +119,7 @@ export class SDModel {
                 opt.externalData = [
                     {
                         data: externaldata,
-                        path: "model.onnx_data"
+                        path: extpath
                     },
                 ]
             }
@@ -126,7 +132,7 @@ export class SDModel {
             this.models[name] = await Session.create(
                 modelSource,
                 externaldata,
-                externaldata ? "model.onnx_data" : undefined,
+                externaldata ? extpath : undefined,
                 model,
                 opt
             );
@@ -161,7 +167,7 @@ export class SDModel {
                 console.log('before step', t, Math.min(...latentsCpu), Math.max(...latentsCpu));
 
                 start = performance.now();
-                const tTensor = new ort.Tensor("float32", new Float32Array([t]), []);
+                const tTensor = new ort.Tensor("float32", new Float32Array([t]), [1]);
                 const latent_input = doClassifierFreeGuidance ? cat([latents, latents.clone()]) : latents;
                 let feed = {
                     "sample": toOrtTensor(latent_input),
