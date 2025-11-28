@@ -3,3 +3,6 @@ dist/
 .DS_Store
 *.log
 .env
+
+t2v/pipelines-ts/
+t2v/schedulers-ts/

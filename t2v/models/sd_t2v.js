@@ -56,7 +56,7 @@ export class SDModel {
         this.models = {"unet": {}, "text_encoder": {}, "vae_decoder": {}};
         this.init_tokenizer();
         this.negativePrompt = "blurry, low quality, bad anatomy";
-        this.guidance_scale = 7.5;
+        this.guidance_scale = 1;
         // Batch size for parallel image generation
         this.batch_size = modelConfig.batchSize || 1;
         // TODO: for now we use fixed config
@@ -140,7 +140,11 @@ export class SDModel {
             
             const batch_size = this.batch_size;
             let start = performance.now();
-            const prompt_embeds = await this.getPromptEmbeds(text.value, this.negativePrompt);
+            let prompt_embeds = await this.getPromptEmbeds(text.value, this.negativePrompt);
+            const doClassifierFreeGuidance = this.guidance_scale > 1.0;
+            const targetPromptBatch = batch_size * (doClassifierFreeGuidance ? 2 : 1);
+            prompt_embeds = ensureBatchSize(prompt_embeds, targetPromptBatch);
+            const prompt_embeds_input = toOrtTensor(prompt_embeds);
 
             let perf_info = [`text_encoder: ${(performance.now() - start).toFixed(1)}ms`];
 
@@ -151,7 +155,6 @@ export class SDModel {
 
             const latent_shape = [batch_size, 4, 64, 64];
             let latents = randomNormalTensor(latent_shape, 0, this.scheduler.initNoiseSigma);
-            const doClassifierFreeGuidance = this.guidance_scale > 1.0;
 
             for (const t of timesteps) {
                 const latentsCpu = await tensorData(latents);
@@ -163,7 +166,7 @@ export class SDModel {
                 let feed = {
                     "sample": toOrtTensor(latent_input),
                     "timestep": tTensor,
-                    "encoder_hidden_states": prompt_embeds,
+                    "encoder_hidden_states": prompt_embeds_input,
                 };
                 const noise = await this.models["unet"].run(feed);
                 
@@ -171,10 +174,13 @@ export class SDModel {
                 perf_info.push(`unet t=${t}: ${(performance.now() - start).toFixed(1)}ms`);
 
                 if(doClassifierFreeGuidance) {
-                    const [noisePredUncond, noisePredText] = [
-                    noise_pred.slice([0, 1]),
-                    noise_pred.slice([1, 2]),
-                    ];
+                    const split = noise_pred.dims?.[0] ?? 0;
+                    const batchChunk = split / 2;
+                    if (!Number.isInteger(batchChunk) || batchChunk === 0) {
+                        throw new Error(`Unexpected noise prediction batch: ${split}`);
+                    }
+                    const noisePredUncond = noise_pred.slice([0, batchChunk]);
+                    const noisePredText = noise_pred.slice([batchChunk, batchChunk * 2]);
                     noise_pred = noisePredUncond.add(noisePredText.sub(noisePredUncond).mul(this.guidance_scale));
                 }
                 latents = this.scheduler.step(noise_pred, t, latents);
@@ -184,17 +190,14 @@ export class SDModel {
             }
 
             start = performance.now();
-            const scaled_latents = latents.div(vae_scaling_factor);
-            const { sample } = await this.models["vae_decoder"].run({ "latent_sample": toOrtTensor(scaled_latents) });
+            const images = await this.makeImages(latents);
             perf_info.push(`vae_decoder: ${(performance.now() - start).toFixed(1)}ms`);
 
-            const sampleOrt = toOrtTensor(sample);
-            await this.draw_image(sampleOrt, 0);
+            for (let i = 0; i < images.length; i++) {
+                await this.draw_image(toOrtTensor(images[i]), i);
+            }
             log(perf_info.join(", "));
             perf_info = [];
-
-            safeDispose(cond_hidden);
-            safeDispose(uncond_hidden);
 
             log("done");
 
@@ -308,6 +311,25 @@ export class SDModel {
         return cat([negativePromptEmbeds, promptEmbeds]);
     }
 
+    async makeImages (latents) {
+        const scaled = latents.div(vae_scaling_factor);
+        const dims = getTensorDims(scaled);
+        const batch = Math.max(dims[0] ?? 1, 1);
+        const images = [];
+
+        for (let i = 0; i < batch; i++) {
+            const latentSample = batch === 1 ? scaled : scaled.slice([i, i + 1]);
+            const decoded = await this.models["vae_decoder"].run({ "latent_sample": toOrtTensor(latentSample) });
+            const image = decoded.sample
+                .div(2)
+                .add(0.5)
+                .clipByValue(0, 1);
+            images.push(image);
+        }
+
+        return images;
+    }
+
     /**
      * draw an image from tensor
      * @param {ort.Tensor} t
@@ -389,4 +411,32 @@ function safeDispose(tensor) {
     if (tensor && typeof tensor.dispose === 'function') {
         tensor.dispose();
     }
+}
+
+function ensureBatchSize(tensor, targetBatch) {
+    if (!tensor || targetBatch <= 0) {
+        return tensor;
+    }
+    const dims = getTensorDims(tensor);
+    if (!dims.length) {
+        return tensor;
+    }
+    const currentBatch = dims[0] ?? 1;
+    if (currentBatch === targetBatch) {
+        return tensor;
+    }
+    if (targetBatch % currentBatch !== 0) {
+        throw new Error(`Cannot reshape embeddings batch ${currentBatch} to ${targetBatch}`);
+    }
+    const repeats = targetBatch / currentBatch;
+    const copies = [];
+    for (let i = 0; i < repeats; i++) {
+        if (typeof tensor.clone === 'function') {
+            copies.push(tensor.clone());
+        } else {
+            const data = tensor.data instanceof Float32Array ? tensor.data.slice() : Float32Array.from(tensor.data || []);
+            copies.push(new Tensor(tensor.type || 'float32', data, dims.slice()));
+        }
+    }
+    return cat(copies);
 }
