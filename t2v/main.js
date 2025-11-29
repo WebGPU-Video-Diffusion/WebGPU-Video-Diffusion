@@ -63,8 +63,8 @@ const models = {
     "unet": {
         url: "unet",
         externaldata: true,
-        extfilename: 2, // 1 = model.onnx_data, 2 = weights.pb
-        local: true,
+        extfilename: 1, // 1 = model.onnx_data, 2 = weights.pb
+        local: false,
     },
     "text_encoder": {
         url: "text_encoder",

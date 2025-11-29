@@ -85,6 +85,9 @@ export class SDModel {
         const hasFP16 = (provider === "wasm") ? false : options.hasFP16;
         this.profiler = options.profiler;
         for (const [name, model] of Object.entries(models)) {
+            if (name === "unet") {
+                this.is_local_unet = model.local;
+            }
             const useLocal = model.local ?? isLocal;
             const remoteBase = model.remoteBase ?? base_model;
             const basePath = useLocal ? `${base_model_local}` : `https://huggingface.co/${remoteBase}/resolve/main`;
@@ -167,7 +170,12 @@ export class SDModel {
                 console.log('before step', t, Math.min(...latentsCpu), Math.max(...latentsCpu));
 
                 start = performance.now();
-                const tTensor = new ort.Tensor("float32", new Float32Array([t]), [1]);
+                let tTensor;
+                if (this.is_local_unet) {
+                    tTensor = new ort.Tensor("float32", new Float32Array([t]), [1]);
+                } else {
+                    tTensor = new ort.Tensor("float32", new Float32Array([t]), []);
+                }
                 const latent_input = doClassifierFreeGuidance ? cat([latents, latents.clone()]) : latents;
                 let feed = {
                     "sample": toOrtTensor(latent_input),
