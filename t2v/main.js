@@ -39,7 +39,7 @@ function getConfig() {
         local: 0,
         intType: "int64",
         floatType: "float32",
-        batchSize: "1",
+        batchSize: "8",
     };
     let vars = query.split("&");
     for (var i = 0; i < vars.length; i++) {

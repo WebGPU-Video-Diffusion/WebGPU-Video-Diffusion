@@ -59,15 +59,13 @@ function log(i) { console.log(i); document.getElementById('status').innerText +=
  * get configuration from url
  */
 function getConfig() {
-  // const query = window.location.search.substring(1);
-  // console.log(query)
   var config = {
-    model: "https://huggingface.co/RanaLLC/small-sd-v0-onnx-fp16/resolve/main",
+    model: "sd1.5/t2vzero-fp32",
     provider: "webgpu",
     device: "gpu",
     threads: "1",
+    local: true,
   }
-  // config.threads = parseInt(config.threads)
   return config
 }
 
@@ -87,8 +85,7 @@ function randn_latents(shape) {
     size *= element
   })
 
-  let data = new Float16Array(size)
-  // Loop over the shape dimensions
+  let data = new Float32Array(size)
   for (let i = 0; i < size; i++) {
     data[i] = randn()
   }
@@ -122,29 +119,25 @@ async function fetchAndCache(base_url, model_path) {
  * load models used in the pipeline
  */
 async function load_models(models) {
-  const cache = await caches.open("onnx")
-  let missing = 0
-  for (const [name, model] of Object.entries(models)) {
-    const url = `${config.model}/${model.url}`
-    let cachedResponse = await cache.match(url)
-    if (cachedResponse === undefined) {
-      missing += model.size
-    }
-  }
-  if (missing > 0) {
-    log(
-      `downloading ${missing} MB from network ... it might take a while`,
-    )
-  } else {
-    log("loading...")
-  }
+  log("loading...")
   for (const [name, model] of Object.entries(models)) {
     try {
       const start = performance.now()
-      const model_bytes = await fetchAndCache(config.model, model.url)
+      const useLocal = model.local ?? config.local
+      const basePath = useLocal ? config.model : `https://huggingface.co/ykeee/StableDiffusion1.5-fp32/resolve/main`
       
-      const sess_opt = { ...opt, ...model.opt }
-      models[name].sess = await ort.InferenceSession.create(model_bytes, sess_opt)
+      let sess_opt = { ...opt, ...model.opt }
+      
+      if (model.externaldata && useLocal) {
+        const modelUrl = `${basePath}/${model.url}/model.onnx`
+        const externalUrl = `${basePath}/${model.url}/model.onnx_data`
+        sess_opt.externalData = [{ path: "model.onnx_data", data: externalUrl }]
+        models[name].sess = await ort.InferenceSession.create(modelUrl, sess_opt)
+      } else {
+        const model_bytes = await fetchAndCache(basePath, `${model.url}/model.onnx`)
+        models[name].sess = await ort.InferenceSession.create(model_bytes, sess_opt)
+      }
+      
       const stop = performance.now()
       log(`${model.url} in ${(stop - start).toFixed(1)}ms`)
     } catch (e) {
@@ -158,9 +151,10 @@ const config = getConfig()
 
 const models = {
   unet: {
-    url: "unet/model.onnx",
+    url: "unet",
     size: 640,
-    // should have 'steps: 1' but will fail to create the session
+    externaldata: true,
+    local: true,
     opt: {
       freeDimensionOverrides: {
         batch_size: 1,
@@ -172,32 +166,21 @@ const models = {
     },
   },
   text_encoder: {
-    url: "text_encoder/model.onnx",
+    url: "text_encoder",
     size: 1700,
-    // should have 'sequence_length: 77' but produces a bad image
+    local: false,
     opt: { freeDimensionOverrides: { batch_size: 1 } },
   },
   vae_decoder: {
-    url: "vae_decoder/model.onnx",
+    url: "vae_decoder",
     size: 95,
+    local: false,
     opt: {
       freeDimensionOverrides: {
         batch_size: 1,
         num_channels_latent: 4,
         height_latent: 64,
         width_latent: 64,
-      },
-    },
-  },
-  vae_encoder: {
-    url: "vae_encoder/model.onnx",
-    size: 137,
-    opt: {
-      freeDimensionOverrides: {
-        batch_size: 1,
-        num_channels_latent: 3,
-        height: 512,
-        width: 512,
       },
     },
   },
@@ -211,7 +194,7 @@ let tokenizer
 let loading
 const vae_scaling_factor = 0.18215;
 const vaeScaleFactor = 8;
-const videoLength = 4;
+const videoLength = 8;
 const motion_field_strength_x = 12;
 const motion_field_strength_y = 12;
 const t0 = 44;
@@ -285,7 +268,7 @@ document.getElementById('send-button').addEventListener('click', function(e) {
  * @param {ort.Tensor} t
  * @param {number} image_nr
  */
-function draw_image(t) {
+function draw_image(t, frameIndex = 0) {
   let pix = t.data;
   for (var i = 0; i < pix.length; i++) {
     let x = pix[i];
@@ -295,12 +278,14 @@ function draw_image(t) {
     pix[i] = x;
   }
   const imageData = t.toImageData({ tensorLayout: 'NCWH', format: 'RGB' });
-  const canvas = document.getElementById(`img_canvas_0`);
-  canvas.width = imageData.width;
-  canvas.height = imageData.height;
-  canvas.getContext('2d').putImageData(imageData, 0, 0);
-  const div = document.getElementById(`img_div_0`);
-  div.style.opacity = 1.
+  const canvas = document.getElementById(`img_canvas_${frameIndex}`);
+  if (canvas) {
+    canvas.width = imageData.width;
+    canvas.height = imageData.height;
+    canvas.getContext('2d').putImageData(imageData, 0, 0);
+    const div = document.getElementById(`img_div_${frameIndex}`);
+    if (div) div.style.opacity = 1.;
+  }
 }
 
 function reshape(tensor, dims) {
@@ -332,7 +317,7 @@ async function backward_loop(
   for (const step of timesteps) {
     // for some reason v1.4 takes int64 as timestep input. ideally we should get input dtype from the model
     // but currently onnxruntime-node does not give out types, only input names
-    const timestep = new Tensor(new Float16Array([step]));
+    const timestep = new Tensor(new Float32Array([step]));
 
     const latentInput = doClassifierFreeGuidance
     ? cat([latents, latents.clone()])
@@ -831,7 +816,13 @@ async function generate_video() {
     });
     perf_info.push(`vae_decoder: ${(performance.now() - start).toFixed(1)}ms`);
 
-    draw_image(sample);
+    // Draw all frames
+    for (let i = 0; i < videoLength; i++) {
+      const frameLatent = latents.slice([i, i + 1]);
+      const frameScaled = frameLatent.div(vae_scaling_factor);
+      const decoded = await models.vae_decoder.sess.run({ latent_sample: frameScaled });
+      draw_image(decoded.sample, i);
+    }
     log(perf_info.join(", "))
     perf_info = [];
 						

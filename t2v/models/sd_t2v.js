@@ -7,7 +7,9 @@ import { Session } from '../backends/index.js';
 
 ort.env.wasm.numThreads = 1;
 ort.env.wasm.simd = true;
-ort.env.wasm.wasmPaths = document.location.pathname.replace('index.html', '') + 'dist/';
+// Fix WASM path for both root and subdirectory access
+const basePath = window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1);
+ort.env.wasm.wasmPaths = basePath + 'dist/';
 
 
 function log(i) { console.log(i); document.getElementById('status').innerText += `\n${i}`; }
@@ -142,13 +144,13 @@ export class SDModel {
 
     async infer(text) {
         try {
-            document.getElementById('status').innerText = "generating ...";
+            document.getElementById('status').innerText = "generating video...";
             
-            const batch_size = this.batch_size;
+            const num_frames = this.batch_size;
             let start = performance.now();
             let prompt_embeds = await this.getPromptEmbeds(text.value, this.negativePrompt);
             const doClassifierFreeGuidance = this.guidance_scale > 1.0;
-            const targetPromptBatch = batch_size * (doClassifierFreeGuidance ? 2 : 1);
+            const targetPromptBatch = 1 * (doClassifierFreeGuidance ? 2 : 1);
             prompt_embeds = ensureBatchSize(prompt_embeds, targetPromptBatch);
             const prompt_embeds_input = toOrtTensor(prompt_embeds);
 
@@ -157,54 +159,66 @@ export class SDModel {
             const num_inference_steps = 30;
             this.scheduler.setTimesteps(num_inference_steps);
             const timesteps = getSchedulerTimesteps(this.scheduler);
-            console.log('timesteps', timesteps.slice(0, 10));
+            log(`PNDM timesteps: ${timesteps.join(',')}`);
 
-            const latent_shape = [batch_size, 4, 64, 64];
-            let latents = randomNormalTensor(latent_shape, 0, this.scheduler.initNoiseSigma);
+            const allFrames = [];
+            let prev_latents = null;
+            const temporal_blend = 0.3; // blend ratio with previous frame
+            
+            for (let frame_idx = 0; frame_idx < num_frames; frame_idx++) {
+                log(`Generating frame ${frame_idx + 1}/${num_frames}`);
+                
+                const latent_shape = [1, 4, 64, 64];
+                let latents = randomNormalTensor(latent_shape, 0, this.scheduler.initNoiseSigma);
+                
+                // Temporal smoothing: blend with previous frame's latents
+                if (prev_latents !== null) {
+                    const latent_data = await tensorData(latents);
+                    const prev_data = await tensorData(prev_latents);
+                    for (let i = 0; i < latent_data.length; i++) {
+                        latent_data[i] = latent_data[i] * (1 - temporal_blend) + prev_data[i] * temporal_blend;
+                    }
+                    latents = new Tensor('float32', latent_data, latent_shape);
+                }
 
-            for (const t of timesteps) {
-                const latentsCpu = await tensorData(latents);
-                console.log('before step', t, Math.min(...latentsCpu), Math.max(...latentsCpu));
+                for (const t of timesteps) {
+                    start = performance.now();
+                    const tTensor = new ort.Tensor("float32", new Float32Array([t]), []);
+                    const latent_input = doClassifierFreeGuidance ? cat([latents, latents.clone()]) : latents;
+                    let feed = {
+                        "sample": toOrtTensor(latent_input),
+                        "timestep": tTensor,
+                        "encoder_hidden_states": prompt_embeds_input,
+                    };
+                    const noise = await this.models["unet"].run(feed);
+                    
+                    let noise_pred = noise.out_sample;
+                    perf_info.push(`unet t=${t}: ${(performance.now() - start).toFixed(1)}ms`);
+
+                    if(doClassifierFreeGuidance) {
+                        const split = noise_pred.dims?.[0] ?? 0;
+                        const batchChunk = split / 2;
+                        if (!Number.isInteger(batchChunk) || batchChunk === 0) {
+                            throw new Error(`Unexpected noise prediction batch: ${split}`);
+                        }
+                        const noisePredUncond = noise_pred.slice([0, batchChunk]);
+                        const noisePredText = noise_pred.slice([batchChunk, batchChunk * 2]);
+                        noise_pred = noisePredUncond.add(noisePredText.sub(noisePredUncond).mul(this.guidance_scale));
+                    }
+                    latents = this.scheduler.step(noise_pred, t, latents);
+                }
+                
+                prev_latents = latents;
 
                 start = performance.now();
-                const tTensor = new ort.Tensor("float32", new Float32Array([t]), []);
-                const latent_input = doClassifierFreeGuidance ? cat([latents, latents.clone()]) : latents;
-                let feed = {
-                    "sample": toOrtTensor(latent_input),
-                    "timestep": tTensor,
-                    "encoder_hidden_states": prompt_embeds_input,
-                };
-                const noise = await this.models["unet"].run(feed);
+                const images = await this.makeImages(latents);
+                perf_info.push(`vae_decoder: ${(performance.now() - start).toFixed(1)}ms`);
                 
-                let noise_pred = noise.out_sample;
-                perf_info.push(`unet t=${t}: ${(performance.now() - start).toFixed(1)}ms`);
-
-                if(doClassifierFreeGuidance) {
-                    const split = noise_pred.dims?.[0] ?? 0;
-                    const batchChunk = split / 2;
-                    if (!Number.isInteger(batchChunk) || batchChunk === 0) {
-                        throw new Error(`Unexpected noise prediction batch: ${split}`);
-                    }
-                    const noisePredUncond = noise_pred.slice([0, batchChunk]);
-                    const noisePredText = noise_pred.slice([batchChunk, batchChunk * 2]);
-                    noise_pred = noisePredUncond.add(noisePredText.sub(noisePredUncond).mul(this.guidance_scale));
-                }
-                latents = this.scheduler.step(noise_pred, t, latents);
-
-                const latentsCpuAfter = await tensorData(latents);
-                console.log('after step', t, Math.min(...latentsCpuAfter), Math.max(...latentsCpuAfter));
+                allFrames.push(images[0]);
+                await this.draw_image(toOrtTensor(images[0]), frame_idx);
             }
-
-            start = performance.now();
-            const images = await this.makeImages(latents);
-            perf_info.push(`vae_decoder: ${(performance.now() - start).toFixed(1)}ms`);
-
-            for (let i = 0; i < images.length; i++) {
-                await this.draw_image(toOrtTensor(images[i]), i);
-            }
+            
             log(perf_info.join(", "));
-            perf_info = [];
-
             log("done");
 
         } catch (error) {
