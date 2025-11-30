@@ -4,6 +4,7 @@ import { randomNormalTensor, cat } from '../util/Tensor.js';
 import { PNDMScheduler } from '../scheduler/PNDMScheduler.js';
 import { Tensor } from '@xenova/transformers';
 import { Session } from '../backends/index.js';
+import { LatentWarper } from '../shaders/latent_warp.js';
 
 ort.env.wasm.numThreads = 1;
 ort.env.wasm.simd = true;
@@ -59,8 +60,9 @@ export class SDModel {
         this.init_tokenizer();
         this.negativePrompt = "blurry, low quality, bad anatomy";
         this.guidance_scale = 7.5;
-        // Batch size for parallel image generation
         this.batch_size = modelConfig.batchSize || 1;
+        this.warper = null;
+        this.gpuDevice = null;
         // TODO: for now we use fixed config
         this.scheduler = new PNDMScheduler({
             num_train_timesteps: 1000,
@@ -86,6 +88,13 @@ export class SDModel {
         const isLocal = options.local === true || options.local === 1 || options.local === '1' || options.local === 'true';
         const hasFP16 = (provider === "wasm") ? false : options.hasFP16;
         this.profiler = options.profiler;
+        
+        if (provider === "webgpu") {
+            const adapter = await navigator.gpu.requestAdapter();
+            this.gpuDevice = await adapter.requestDevice();
+            this.warper = new LatentWarper(this.gpuDevice);
+            log("WebGPU latent warper initialized");
+        }
         for (const [name, model] of Object.entries(models)) {
             const useLocal = model.local ?? isLocal;
             const remoteBase = model.remoteBase ?? base_model;
@@ -157,30 +166,44 @@ export class SDModel {
             let perf_info = [`text_encoder: ${(performance.now() - start).toFixed(1)}ms`];
 
             const num_inference_steps = 30;
-            this.scheduler.setTimesteps(num_inference_steps);
-            const timesteps = getSchedulerTimesteps(this.scheduler);
-            log(`PNDM timesteps: ${timesteps.join(',')}`);
-
             const allFrames = [];
-            let prev_latents = null;
-            const temporal_blend = 0.3; // blend ratio with previous frame
+            const latent_shape = [1, 4, 64, 64];
+            const motion_speed_x = 1.5;
+            const motion_speed_y = 0.0;
+            
+            // Generate initial noise ONCE for all frames
+            const initial_noise_data = await tensorData(randomNormalTensor(latent_shape, 0, this.scheduler.initNoiseSigma));
             
             for (let frame_idx = 0; frame_idx < num_frames; frame_idx++) {
                 log(`Generating frame ${frame_idx + 1}/${num_frames}`);
                 
-                const latent_shape = [1, 4, 64, 64];
-                let latents = randomNormalTensor(latent_shape, 0, this.scheduler.initNoiseSigma);
-                
-                // Temporal smoothing: blend with previous frame's latents
-                if (prev_latents !== null) {
-                    const latent_data = await tensorData(latents);
-                    const prev_data = await tensorData(prev_latents);
-                    for (let i = 0; i < latent_data.length; i++) {
-                        latent_data[i] = latent_data[i] * (1 - temporal_blend) + prev_data[i] * temporal_blend;
-                    }
-                    latents = new Tensor('float32', latent_data, latent_shape);
+                // CRITICAL: Reset scheduler for each frame
+                this.scheduler.setTimesteps(num_inference_steps);
+                const timesteps = getSchedulerTimesteps(this.scheduler);
+                if (frame_idx === 0) {
+                    log(`PNDM timesteps: ${timesteps.join(',')}`);
                 }
-
+                
+                // Warp initial noise based on frame index
+                let current_noise_data;
+                if (frame_idx === 0) {
+                    current_noise_data = initial_noise_data;
+                } else {
+                    const dx = motion_speed_x * frame_idx;
+                    const dy = motion_speed_y * frame_idx;
+                    
+                    if (this.warper) {
+                        start = performance.now();
+                        current_noise_data = await this.warper.warp(initial_noise_data, dx, dy);
+                        perf_info.push(`warp: ${(performance.now() - start).toFixed(1)}ms`);
+                    } else {
+                        current_noise_data = initial_noise_data;
+                    }
+                }
+                
+                let latents = new Tensor('float32', current_noise_data, latent_shape);
+                
+                // Full denoising for each frame
                 for (const t of timesteps) {
                     start = performance.now();
                     const tTensor = new ort.Tensor("float32", new Float32Array([t]), []);
@@ -207,8 +230,6 @@ export class SDModel {
                     }
                     latents = this.scheduler.step(noise_pred, t, latents);
                 }
-                
-                prev_latents = latents;
 
                 start = performance.now();
                 const images = await this.makeImages(latents);
@@ -219,7 +240,7 @@ export class SDModel {
             }
             
             log(perf_info.join(", "));
-            log("done");
+            log("Video generation done");
 
         } catch (error) {
             log(error);
