@@ -1,8 +1,8 @@
 import * as ort from 'onnxruntime-web/webgpu';
 import { toBigInt64Array } from '../utils/common.js';
-import { randomNormalTensor, cat, ensureFloat32Array } from '../util/Tensor.js';
+import { randomNormalTensor, cat } from '../util/Tensor.js';
 import { PNDMScheduler } from '../scheduler/PNDMScheduler.js';
-import { AutoTokenizer, Tensor } from '@xenova/transformers';
+import { Tensor } from '@xenova/transformers';
 import { Session } from '../backends/index.js';
 
 ort.env.wasm.numThreads = 1;
@@ -57,7 +57,6 @@ export class SDModel {
         this.init_tokenizer();
         this.negativePrompt = "blurry, low quality, bad anatomy";
         this.guidance_scale = 7.5;
-        this.debugShapes = Boolean(modelConfig.debugShapes);
         // Batch size for parallel image generation
         this.batch_size = modelConfig.batchSize || 1;
         // TODO: for now we use fixed config
@@ -84,11 +83,6 @@ export class SDModel {
         const verbose = options.verbose;
         const isLocal = options.local === true || options.local === 1 || options.local === '1' || options.local === 'true';
         const hasFP16 = (provider === "wasm") ? false : options.hasFP16;
-        // const requestedType = this.modelConfig.floatType || (hasFP16 ? 'float16' : 'float32');
-        if (!this.dtype) {
-            this.dtype = hasFP16 ? 'float16' : 'float32';
-            log(`Using tensor type: ${this.dtype}`);
-        }
         this.profiler = options.profiler;
         for (const [name, model] of Object.entries(models)) {
             if (name === "unet") {
@@ -145,6 +139,7 @@ export class SDModel {
                 model,
                 opt
             );
+            this.dtype = (hasFP16) ? "float16" : "float32";
         }
     }
 
@@ -153,16 +148,12 @@ export class SDModel {
             document.getElementById('status').innerText = "generating ...";
             
             const batch_size = this.batch_size;
-            log(`current batch size: ${batch_size}`);
             let start = performance.now();
             let prompt_embeds = await this.getPromptEmbeds(text.value, this.negativePrompt);
             const doClassifierFreeGuidance = this.guidance_scale > 1.0;
             const targetPromptBatch = batch_size * (doClassifierFreeGuidance ? 2 : 1);
             prompt_embeds = ensureBatchSize(prompt_embeds, targetPromptBatch);
-            const prompt_embeds_input = this.dtype === 'float16' ? toOrtTensorFp16(prompt_embeds) : toOrtTensor(prompt_embeds);
-            if (this.debugShapes) {
-                logTensorShape('prompt_embeds_input', prompt_embeds_input);
-            }
+            const prompt_embeds_input = toOrtTensor(prompt_embeds);
 
             let perf_info = [`text_encoder: ${(performance.now() - start).toFixed(1)}ms`];
 
@@ -181,34 +172,19 @@ export class SDModel {
                 start = performance.now();
                 let tTensor;
                 if (this.is_local_unet) {
-                    if (this.dtype === 'float16') {
-                        tTensor = new ort.Tensor("float16", new Float16Array([t]), [1]);
-                    } else {
-                        tTensor = new ort.Tensor("float32", new Float32Array([t]), []);
-                    }
+                    tTensor = new ort.Tensor("float32", new Float32Array([t]), [1]);
                 } else {
-                    if (this.dtype === 'float16') {
-                        tTensor = new ort.Tensor("float16", new Float16Array([t]), []);
-                    } else {
-                        tTensor = new ort.Tensor("float32", new Float32Array([t]), []);
-                    }
+                    tTensor = new ort.Tensor("float32", new Float32Array([t]), []);
                 }
                 const latent_input = doClassifierFreeGuidance ? cat([latents, latents.clone()]) : latents;
-                const latent_input_ort = this.dtype === 'float16' ? toOrtTensorFp16(latent_input) : toOrtTensor(latent_input);
-                if (this.debugShapes) {
-                    logTensorShape('latent_input', latent_input_ort);
-                }
                 let feed = {
-                    "sample": latent_input_ort,
+                    "sample": toOrtTensor(latent_input),
                     "timestep": tTensor,
                     "encoder_hidden_states": prompt_embeds_input,
                 };
                 const noise = await this.models["unet"].run(feed);
                 
                 let noise_pred = noise.out_sample;
-                if (this.debugShapes) {
-                    logTensorShape('noise_pred', noise_pred);
-                }
                 perf_info.push(`unet t=${t}: ${(performance.now() - start).toFixed(1)}ms`);
 
                 if(doClassifierFreeGuidance) {
@@ -345,11 +321,8 @@ export class SDModel {
 
         const promptEmbeds = await this.encodePrompt(prompt, highestTokenLength);
         const negativePromptEmbeds = await this.encodePrompt(negativePrompt || '', highestTokenLength);
-        if (this.guidance_scale > 1.0) {
-            return cat([negativePromptEmbeds, promptEmbeds]);
-        } else {
-            return promptEmbeds;
-        }
+
+        return cat([negativePromptEmbeds, promptEmbeds]);
     }
 
     async makeImages (latents) {
@@ -359,13 +332,8 @@ export class SDModel {
         const images = [];
 
         for (let i = 0; i < batch; i++) {
-            const latent_sample = batch === 1 ? scaled : scaled.slice([i, i + 1]);
-            //const latent_sample_ort = this.dtype === 'float16' ? toOrtTensorFp16(latent_sample) : toOrtTensor(latent_sample);
-            const latent_sample_ort = toOrtTensor(latent_sample);
-            const decoded = await this.models["vae_decoder"].run({ "latent_sample": latent_sample_ort });
-            if (this.debugShapes) {
-                logTensorShape('decoded_sample', decoded.sample);
-            }
+            const latentSample = batch === 1 ? scaled : scaled.slice([i, i + 1]);
+            const decoded = await this.models["vae_decoder"].run({ "latent_sample": toOrtTensor(latentSample) });
             const image = decoded.sample
                 .div(2)
                 .add(0.5)
@@ -432,12 +400,12 @@ function toOrtTensor(tensor) {
     return new ort.Tensor(tensor.type || 'float32', data, getTensorDims(tensor));
 }
 
-function toOrtTensorFp16(tensor) {
-    if (tensor instanceof ort.Tensor) {
+async function toXTensor(tensor) {
+    if (tensor instanceof Tensor) {
         return tensor;
     }
-    const data = tensor.data instanceof Float16Array ? tensor.data : Float16Array.from(tensor.data);
-    return new ort.Tensor("float16", data, getTensorDims(tensor));
+    const data = await tensorData(tensor);
+    return new Tensor(tensor.type || 'float32', data.slice ? data : Float32Array.from(data), getTensorDims(tensor));
 }
 
 function getSchedulerTimesteps(scheduler) {
@@ -485,21 +453,4 @@ function ensureBatchSize(tensor, targetBatch) {
         }
     }
     return cat(copies);
-}
-
-function castTensorType(tensor, type) {
-    if (!tensor || !type || tensor.type === type) {
-        return tensor;
-    }
-    const data = ensureFloat32Array(tensor.data);
-    return new Tensor(type, data.slice ? data : Float32Array.from(data), getTensorDims(tensor));
-}
-
-function logTensorShape(label, tensor) {
-    if (!tensor) {
-        console.log(`[shape] ${label}: <empty>`);
-        return;
-    }
-    const dims = getTensorDims(tensor) || [];
-    console.log(`[shape] ${label}: [${dims.join(', ')}]`);
 }

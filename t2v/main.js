@@ -1,6 +1,7 @@
 
 import ort from 'onnxruntime-web/webgpu';
 //import { SDModel } from './models/sd.js';
+//import { SDModel } from './models/sd_t2img.js';
 import { SDModel } from './models/sd_t2v.js';
 import {draw_image} from './utils/common.js';
 
@@ -30,7 +31,7 @@ function getConfig() {
         //model: "onnx-community/stable-diffusion-v1-5-ONNX",
         //model: "tlwu/stable-diffusion-v1-5-onnxruntime",
         model: "ykeee/StableDiffusion1.5-fp32",
-        local_model: "sd1.5/t2vzero-fp32",
+        local_model: "sd1.5/fp16",
         provider: "webgpu",
         device: "gpu",
         threads: "1",
@@ -39,7 +40,8 @@ function getConfig() {
         local: 0,
         intType: "int64",
         floatType: "float32",
-        batchSize: "1",
+        batchSize: "2",
+        debugShapes: 1,
     };
     let vars = query.split("&");
     for (var i = 0; i < vars.length; i++) {
@@ -54,6 +56,7 @@ function getConfig() {
     config.batchSize = parseInt(config.batchSize);
     config.local = toBoolean(config.local);
     config.verbose = parseInt(config.verbose) || 0;
+    config.debugShapes = toBoolean(config.debugShapes);
     return config;
 }
 
@@ -63,8 +66,8 @@ const models = {
     "unet": {
         url: "unet",
         externaldata: true,
-        extfilename: 1, // 1 = model.onnx_data, 2 = weights.pb
-        local: false,
+        extfilename: 2, // 1 = model.onnx_data, 2 = weights.pb
+        local: true,
     },
     "text_encoder": {
         url: "text_encoder",

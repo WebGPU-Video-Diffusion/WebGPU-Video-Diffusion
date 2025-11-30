@@ -2,6 +2,69 @@
 import { Tensor } from '@xenova/transformers';
 import seedrandom from 'seedrandom';
 
+const _floatView = new Float32Array(1);
+const _intView = new Uint32Array(_floatView.buffer);
+
+function float16BitsToFloat32(bits) {
+  const sign = (bits & 0x8000) << 16;
+  let exponent = bits & 0x7c00;
+  let mantissa = bits & 0x03ff;
+
+  if (exponent === 0x7c00) {
+    _intView[0] = sign | 0x7f800000 | (mantissa << 13);
+    return _floatView[0];
+  }
+
+  if (exponent !== 0) {
+    exponent = (exponent >> 10) + 112;
+    mantissa <<= 13;
+    _intView[0] = sign | (exponent << 23) | mantissa;
+    return _floatView[0];
+  }
+
+  if (mantissa === 0) {
+    _intView[0] = sign;
+    return _floatView[0];
+  }
+
+  exponent = 113;
+  while ((mantissa & 0x0400) === 0) {
+    mantissa <<= 1;
+    exponent -= 1;
+  }
+  mantissa = (mantissa & 0x03ff) << 13;
+  _intView[0] = sign | (exponent << 23) | mantissa;
+  return _floatView[0];
+}
+
+export function float16ArrayToFloat32Array(data) {
+  if (!data) {
+    return new Float32Array();
+  }
+  const src = data instanceof Uint16Array ? data : Uint16Array.from(data);
+  const out = new Float32Array(src.length);
+  for (let i = 0; i < src.length; i++) {
+    out[i] = float16BitsToFloat32(src[i]);
+  }
+  return out;
+}
+
+export function ensureFloat32Array(data) {
+  if (data instanceof Float32Array) {
+    return data;
+  }
+  if (data instanceof Uint16Array) {
+    return float16ArrayToFloat32Array(data);
+  }
+  if (Array.isArray(data)) {
+    return Float32Array.from(data);
+  }
+  if (data && typeof data.length === 'number') {
+    return Float32Array.from(data);
+  }
+  return new Float32Array();
+}
+
 Tensor.prototype.reverse = function () {
   return new Tensor(this.type, this.data.reverse(), this.dims.slice());
 };
@@ -302,9 +365,14 @@ export function replaceTensors(modelRunResult) {
   for (const prop in modelRunResult) {
     const modelTensor = modelRunResult[prop];
     if (modelTensor && modelTensor.dims) {
+      const isFloatTensor = modelTensor.type === 'float32' || modelTensor.type === 'float16';
+      const tensorType = isFloatTensor ? 'float32' : modelTensor.type;
+      const tensorData = isFloatTensor
+        ? ensureFloat32Array(modelTensor.data)
+        : modelTensor.data;
       result[prop] = new Tensor(
-        modelTensor.type,
-        modelTensor.data,
+        tensorType,
+        tensorData,
         modelTensor.dims
       );
     }
