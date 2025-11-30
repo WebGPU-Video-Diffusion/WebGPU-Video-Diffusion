@@ -63,7 +63,7 @@ const models = {
     "unet": {
         url: "unet",
         externaldata: true,
-        extfilename: 2, // 1 = model.onnx_data, 2 = weights.pb
+        extfilename: 1, // 1 = model.onnx_data, 2 = weights.pb
         local: true,
     },
     "text_encoder": {
@@ -108,13 +108,7 @@ async function hasFp16() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-    hasFp16().then((fp16) => {
-        if (fp16) {
-            loading = Init(true);
-        } else {
-            log("Your GPU or Browser doesn't support webgpu/f16");
-        }
-    });
+    loading = Init(false);
 });
 
 document.getElementById('send-button').addEventListener('click', function (e) {

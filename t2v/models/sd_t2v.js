@@ -167,7 +167,7 @@ export class SDModel {
                 console.log('before step', t, Math.min(...latentsCpu), Math.max(...latentsCpu));
 
                 start = performance.now();
-                const tTensor = new ort.Tensor("float32", new Float32Array([t]), [1]);
+                const tTensor = new ort.Tensor("float32", new Float32Array([t]), []);
                 const latent_input = doClassifierFreeGuidance ? cat([latents, latents.clone()]) : latents;
                 let feed = {
                     "sample": toOrtTensor(latent_input),

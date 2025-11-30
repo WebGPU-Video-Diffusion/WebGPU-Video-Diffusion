@@ -1,6 +1,5 @@
 // modified from diffuser.js
 import { Tensor } from '@xenova/transformers';
-import seedrandom from 'seedrandom';
 
 Tensor.prototype.reverse = function () {
   return new Tensor(this.type, this.data.reverse(), this.dims.slice());
@@ -257,7 +256,7 @@ export function scalarTensor(num, type = 'float32') {
 
 export function randomNormalTensor(shape, mean = 0, std = 1, type = 'float32', seed = '') {
   const data = [];
-  const rng = seed !== '' ? seedrandom(seed) : seedrandom();
+  const rng = Math.random;
   const total = shape.reduce((a, b) => a * b, 1);
   for (let i = 0; i < total; i++) {
     data.push(randomNormal(rng) * std + mean);
