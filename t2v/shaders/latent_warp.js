@@ -75,21 +75,18 @@ export class LatentWarper {
         const [batch, channels, height, width] = [1, 4, 64, 64];
         const size = batch * channels * height * width;
 
-        // Convert to Float32Array if needed
         const sourceData = sourceLatent instanceof Float32Array ? sourceLatent : 
                           (sourceLatent.data || Float32Array.from(sourceLatent));
 
         const outputData = new Float32Array(size);
         
-        // CPU-based warping with bilinear interpolation
         for (let c = 0; c < channels; c++) {
             for (let y = 0; y < height; y++) {
                 for (let x = 0; x < width; x++) {
-                    // Source coordinates with motion offset
                     const src_x = x - dx;
                     const src_y = y - dy;
                     
-                    // Bilinear interpolation
+                    // Wrap coordinates
                     const x0 = Math.floor(src_x);
                     const x1 = x0 + 1;
                     const y0 = Math.floor(src_y);
@@ -100,23 +97,16 @@ export class LatentWarper {
                     
                     let value = 0;
                     
-                    // Boundary check and interpolation
-                    if (x0 >= 0 && x0 < width && y0 >= 0 && y0 < height) {
-                        const idx00 = c * height * width + y0 * width + x0;
-                        value += sourceData[idx00] * (1 - wx) * (1 - wy);
-                    }
-                    if (x1 >= 0 && x1 < width && y0 >= 0 && y0 < height) {
-                        const idx10 = c * height * width + y0 * width + x1;
-                        value += sourceData[idx10] * wx * (1 - wy);
-                    }
-                    if (x0 >= 0 && x0 < width && y1 >= 0 && y1 < height) {
-                        const idx01 = c * height * width + y1 * width + x0;
-                        value += sourceData[idx01] * (1 - wx) * wy;
-                    }
-                    if (x1 >= 0 && x1 < width && y1 >= 0 && y1 < height) {
-                        const idx11 = c * height * width + y1 * width + x1;
-                        value += sourceData[idx11] * wx * wy;
-                    }
+                    const getIdx = (xx, yy) => {
+                        const wrapped_x = ((xx % width) + width) % width;
+                        const wrapped_y = ((yy % height) + height) % height;
+                        return c * height * width + wrapped_y * width + wrapped_x;
+                    };
+                    
+                    value += sourceData[getIdx(x0, y0)] * (1 - wx) * (1 - wy);
+                    value += sourceData[getIdx(x1, y0)] * wx * (1 - wy);
+                    value += sourceData[getIdx(x0, y1)] * (1 - wx) * wy;
+                    value += sourceData[getIdx(x1, y1)] * wx * wy;
                     
                     const out_idx = c * height * width + y * width + x;
                     outputData[out_idx] = value;

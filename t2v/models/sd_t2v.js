@@ -182,11 +182,10 @@ export class SDModel {
 
             let perf_info = [`text_encoder: ${(performance.now() - start).toFixed(1)}ms`];
 
-            const num_inference_steps = 20;
+            const num_inference_steps = 30;
             const allFrames = [];
             const latent_shape = [1, 4, 64, 64];
-            //const latent_shape = [1, 4, 32, 32]; // do not use it!!!!!
-            const motion_speed_x = 2.0;
+            const motion_speed_x = 1.0;
             const motion_speed_y = 0.0;
             
             const initial_noise_data = await tensorData(randomNormalTensor(latent_shape, 0, 1.0));
