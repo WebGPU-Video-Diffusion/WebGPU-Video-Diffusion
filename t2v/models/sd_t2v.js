@@ -157,8 +157,8 @@ export class SDModel {
             let start = performance.now();
             let prompt_embeds = await this.getPromptEmbeds(text.value, this.negativePrompt);
             const doClassifierFreeGuidance = this.guidance_scale > 1.0;
-            const targetPromptBatch = batch_size * (doClassifierFreeGuidance ? 2 : 1);
-            prompt_embeds = ensureBatchSize(prompt_embeds, targetPromptBatch);
+            //const targetPromptBatch = batch_size * (doClassifierFreeGuidance ? 2 : 1);
+            //prompt_embeds = ensureBatchSize(prompt_embeds, targetPromptBatch);
             const prompt_embeds_input = this.dtype === 'float16' ? toOrtTensorFp16(prompt_embeds) : toOrtTensor(prompt_embeds);
             if (this.debugShapes) {
                 logTensorShape('prompt_embeds_input', prompt_embeds_input);
@@ -180,11 +180,17 @@ export class SDModel {
 
                 start = performance.now();
                 let tTensor;
+                let tData;
+                let Bt = doClassifierFreeGuidance ? batch_size * 2 : batch_size;
                 if (this.is_local_unet) {
                     if (this.dtype === 'float16') {
-                        tTensor = new ort.Tensor("float16", new Float16Array([t]), [1]);
+                        const arr = new Float16Array(Bt);
+                        arr.fill(t);
+                        tData = new Float16Array(arr);
+                        tTensor = new ort.Tensor("float16", tData, [Bt]);
+                        logTensorShape('tTensor', tTensor);
                     } else {
-                        tTensor = new ort.Tensor("float32", new Float32Array([t]), []);
+                        tTensor = new ort.Tensor("float32", new Float32Array([t]), [Bt]);
                     }
                 } else {
                     if (this.dtype === 'float16') {
@@ -310,15 +316,49 @@ export class SDModel {
         }
       }
 
-    /**
-     * Returns the prompt and negative prompt text embeddings.
-     * 
-     * @param prompt Input prompt.
-     * @param negativePrompt Input negative prompt.
-     * @returns Tensor containing the prompt and negative prompt embeddings.
-     */
+    // /**
+    //  * Returns the prompt and negative prompt text embeddings.
+    //  * 
+    //  * @param prompt Input prompt.
+    //  * @param negativePrompt Input negative prompt.
+    //  * @returns Tensor containing the prompt and negative prompt embeddings.
+    //  */
+    // async getPromptEmbeds (prompt, negativePrompt) {
+    //     // We check which has more tokens between the prompt and negative prompt
+    //     const promptTokens = this.tokenizer(
+    //         prompt,
+    //         {
+    //         return_tensor: false,
+    //         padding: false,
+    //         max_length: this.tokenizer.model_max_length,
+    //         return_tensor_dtype: 'int32',
+    //         },
+    //     );
+
+    //     const negPromptTokens = this.tokenizer(
+    //         negativePrompt,
+    //         {
+    //         return_tensor: false,
+    //         padding: false,
+    //         max_length: this.tokenizer.model_max_length,
+    //         return_tensor_dtype: 'int32',
+    //         },
+    //     );
+
+    //     const promptTokensLength = promptTokens.input_ids.length; // Number of tokens in prompt including the <START> and <END> tokens
+    //     const negPromptTokensLength = negPromptTokens.input_ids.length; // Number of tokens in negative prompt including the <START> and <END> tokens
+    //     const highestTokenLength = Math.max(promptTokensLength, negPromptTokensLength);
+
+    //     const promptEmbeds = await this.encodePrompt(prompt, highestTokenLength);
+    //     const negativePromptEmbeds = await this.encodePrompt(negativePrompt || '', highestTokenLength);
+    //     if (this.guidance_scale > 1.0) {
+    //         return cat([negativePromptEmbeds, promptEmbeds]);
+    //     } else {
+    //         return promptEmbeds;
+    //     }
+    // }
+
     async getPromptEmbeds (prompt, negativePrompt) {
-        // We check which has more tokens between the prompt and negative prompt
         const promptTokens = this.tokenizer(
             prompt,
             {
@@ -338,15 +378,38 @@ export class SDModel {
             return_tensor_dtype: 'int32',
             },
         );
+        const highestTokenLength = Math.max(
+            promptTokens.input_ids.length,
+            negPromptTokens.input_ids.length,
+        );
 
-        const promptTokensLength = promptTokens.input_ids.length; // Number of tokens in prompt including the <START> and <END> tokens
-        const negPromptTokensLength = negPromptTokens.input_ids.length; // Number of tokens in negative prompt including the <START> and <END> tokens
-        const highestTokenLength = Math.max(promptTokensLength, negPromptTokensLength);
+        const basePromptEmbeds = await this.encodePrompt(prompt, highestTokenLength);           // [1, L, D]
+        const baseNegEmbeds    = await this.encodePrompt(negativePrompt || '', highestTokenLength); // [1, L, D]
 
-        const promptEmbeds = await this.encodePrompt(prompt, highestTokenLength);
-        const negativePromptEmbeds = await this.encodePrompt(negativePrompt || '', highestTokenLength);
+        const batchSize = this.batch_size || 1;
+
+        const repeatBatch = (t) => {
+            const dims = getTensorDims(t); // [1, L, D]
+            const copies = [];
+            for (let i = 0; i < batchSize; i++) {
+                if (typeof t.clone === 'function') {
+                    copies.push(t.clone());
+                } else {
+                    const data = t.data instanceof Float32Array
+                        ? t.data.slice()
+                        : Float32Array.from(t.data || []);
+                    copies.push(new Tensor(t.type || 'float32', data, dims.slice()));
+                }
+            }
+            return cat(copies);  // [batchSize, L, D]
+        };
+
+        const promptEmbeds = repeatBatch(basePromptEmbeds);      // [B, L, D]
+        const negEmbeds    = repeatBatch(baseNegEmbeds);         // [B, L, D]
+
         if (this.guidance_scale > 1.0) {
-            return cat([negativePromptEmbeds, promptEmbeds]);
+
+            return cat([negEmbeds, promptEmbeds]);
         } else {
             return promptEmbeds;
         }
@@ -383,13 +446,6 @@ export class SDModel {
      */
     async draw_image(t, image_nr) {
         const pix = await tensorData(t);
-        for (let i = 0; i < pix.length; i++) {
-            let x = pix[i];
-            x = x / 2 + 0.5;
-            if (x < 0.) x = 0.;
-            if (x > 1.) x = 1.;
-            pix[i] = x;
-        }
         const tmpTensor = new ort.Tensor('float32', pix, getTensorDims(t));
         const imageData = tmpTensor.toImageData({ tensorLayout: 'NCWH', format: 'RGB' });
         const canvas = document.getElementById(`img_canvas_${image_nr}`);
