@@ -182,9 +182,10 @@ export class SDModel {
 
             let perf_info = [`text_encoder: ${(performance.now() - start).toFixed(1)}ms`];
 
-            const num_inference_steps = 30;
+            const num_inference_steps = 20;
             const allFrames = [];
             const latent_shape = [1, 4, 64, 64];
+            //const latent_shape = [1, 4, 32, 32]; // do not use it!!!!!
             const motion_speed_x = 2.0;
             const motion_speed_y = 0.0;
             
@@ -256,6 +257,7 @@ export class SDModel {
             }
             
             log(perf_info.join(", "));
+            await this.createVideo(allFrames);
             log("Video generation done");
 
         } catch (error) {
@@ -393,22 +395,53 @@ export class SDModel {
      * @param {number} image_nr
      */
     async draw_image(t, image_nr) {
-        const pix = await tensorData(t);
-        for (let i = 0; i < pix.length; i++) {
-            let x = pix[i];
-            x = x / 2 + 0.5;
-            if (x < 0.) x = 0.;
-            if (x > 1.) x = 1.;
-            pix[i] = x;
-        }
-        const tmpTensor = new ort.Tensor('float32', pix, getTensorDims(t));
-        const imageData = tmpTensor.toImageData({ tensorLayout: 'NCWH', format: 'RGB' });
+        const imageData = t.toImageData({ tensorLayout: 'NCWH', format: 'RGB' });
         const canvas = document.getElementById(`img_canvas_${image_nr}`);
         canvas.width = imageData.width;
         canvas.height = imageData.height;
         canvas.getContext('2d').putImageData(imageData, 0, 0);
         const div = document.getElementById(`img_div_${image_nr}`);
         div.style.opacity = 1.;
+    }
+
+    async createVideo(frames) {
+        log("Creating video from frames...");
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 512;
+        const ctx = canvas.getContext('2d');
+        
+        const stream = canvas.captureStream(8);
+        const mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+        const chunks = [];
+        
+        mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+        mediaRecorder.onstop = () => {
+            const blob = new Blob(chunks, { type: 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            const video = document.getElementById('video-player');
+            video.src = url;
+            document.getElementById('video_area').style.display = 'block';
+            
+            document.getElementById('download-video-btn').onclick = () => {
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'generated_video.webm';
+                a.click();
+            };
+            log("Video created successfully!");
+        };
+        
+        mediaRecorder.start();
+        
+        for (let i = 0; i < frames.length; i++) {
+            const ortTensor = toOrtTensor(frames[i]);
+            const imageData = ortTensor.toImageData({ tensorLayout: 'NCWH', format: 'RGB' });
+            ctx.putImageData(imageData, 0, 0);
+            await new Promise(resolve => setTimeout(resolve, 125));
+        }
+        
+        mediaRecorder.stop();
     }
 }
 
