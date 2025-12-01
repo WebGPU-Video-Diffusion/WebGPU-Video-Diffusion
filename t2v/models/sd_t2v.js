@@ -15,6 +15,23 @@ ort.env.wasm.wasmPaths = basePath + 'dist/';
 
 function log(i) { console.log(i); document.getElementById('status').innerText += `\n${i}`; }
 
+function renormalizeNoise(noiseData, targetStd = 1.0) {
+    let sum = 0, sumSq = 0;
+    const len = noiseData.length;
+    for (let i = 0; i < len; i++) {
+        const v = noiseData[i];
+        sum += v;
+        sumSq += v * v;
+    }
+    const mean = sum / len;
+    const variance = (sumSq / len) - (mean * mean);
+    const std = Math.sqrt(variance);
+    const scale = targetStd / (std + 1e-6);
+    for (let i = 0; i < len; i++) {
+        noiseData[i] = (noiseData[i] - mean) * scale;
+    }
+}
+
 const sigma = 14.6146;
 const gamma = 0;
 const vae_scaling_factor = 0.18215;
@@ -63,8 +80,7 @@ export class SDModel {
         this.batch_size = modelConfig.batchSize || 1;
         this.warper = null;
         this.gpuDevice = null;
-        // TODO: for now we use fixed config
-        this.scheduler = new PNDMScheduler({
+        this.schedulerConfig = {
             num_train_timesteps: 1000,
             beta_start: 0.00085,
             beta_end: 0.012,
@@ -72,7 +88,8 @@ export class SDModel {
             prediction_type: 'epsilon',
             skip_prk_steps: true,
             final_alpha_cumprod: 1e-3,
-        });
+        };
+        this.scheduler = new PNDMScheduler(this.schedulerConfig);
     }
 
     async init_tokenizer() {
@@ -168,26 +185,24 @@ export class SDModel {
             const num_inference_steps = 30;
             const allFrames = [];
             const latent_shape = [1, 4, 64, 64];
-            const motion_speed_x = 1.5;
+            const motion_speed_x = 2.0;
             const motion_speed_y = 0.0;
             
-            // Generate initial noise ONCE for all frames
-            const initial_noise_data = await tensorData(randomNormalTensor(latent_shape, 0, this.scheduler.initNoiseSigma));
+            const initial_noise_data = await tensorData(randomNormalTensor(latent_shape, 0, 1.0));
             
             for (let frame_idx = 0; frame_idx < num_frames; frame_idx++) {
                 log(`Generating frame ${frame_idx + 1}/${num_frames}`);
                 
-                // CRITICAL: Reset scheduler for each frame
+                this.scheduler = new PNDMScheduler(this.schedulerConfig);
                 this.scheduler.setTimesteps(num_inference_steps);
                 const timesteps = getSchedulerTimesteps(this.scheduler);
                 if (frame_idx === 0) {
                     log(`PNDM timesteps: ${timesteps.join(',')}`);
                 }
                 
-                // Warp initial noise based on frame index
                 let current_noise_data;
                 if (frame_idx === 0) {
-                    current_noise_data = initial_noise_data;
+                    current_noise_data = new Float32Array(initial_noise_data);
                 } else {
                     const dx = motion_speed_x * frame_idx;
                     const dy = motion_speed_y * frame_idx;
@@ -195,9 +210,10 @@ export class SDModel {
                     if (this.warper) {
                         start = performance.now();
                         current_noise_data = await this.warper.warp(initial_noise_data, dx, dy);
+                        renormalizeNoise(current_noise_data, 1.0);
                         perf_info.push(`warp: ${(performance.now() - start).toFixed(1)}ms`);
                     } else {
-                        current_noise_data = initial_noise_data;
+                        current_noise_data = new Float32Array(initial_noise_data);
                     }
                 }
                 
