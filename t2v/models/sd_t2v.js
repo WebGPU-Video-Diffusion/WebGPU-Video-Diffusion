@@ -7,7 +7,13 @@ import { Session } from '../backends/index.js';
 
 ort.env.wasm.numThreads = 1;
 ort.env.wasm.simd = true;
-ort.env.wasm.wasmPaths = document.location.pathname.replace('index.html', '') + 'dist/';
+
+// Fix wasmPaths for both local and GitHub Pages
+const basePath = document.location.pathname.endsWith('/') 
+    ? document.location.pathname 
+    : document.location.pathname.replace(/\/[^\/]*$/, '/');
+ort.env.wasm.wasmPaths = basePath + 'dist/';
+console.log('wasmPaths:', ort.env.wasm.wasmPaths);
 
 
 function log(i) { console.log(i); document.getElementById('status').innerText += `\n${i}`; }
