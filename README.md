@@ -177,11 +177,12 @@ num_inference_steps: 50,      // Total diffusion steps
 - [Stable Diffusion](https://github.com/CompVis/stable-diffusion) - CompVis
 - [ONNX Runtime Web](https://onnxruntime.ai/) - Microsoft
 - [WebGPU Specification](https://www.w3.org/TR/webgpu/) - W3C
+- [Diffuser.js](https://github.com/dakenf/diffusers.js/) - Arthur Islamov
+
 
 ---
 
 ##  License
-
 This project is for educational purposes as part of CIS 5650 GPU Programming course at University of Pennsylvania.
 
 ---
