@@ -189,6 +189,6 @@ This project is for educational purposes as part of CIS 5650 GPU Programming cou
 
 ##  Acknowledgments
 
-- Prof. Patrick Cozzi and the CIS 5650 teaching team
+- Shehzan Mohammed and the CIS 5650 teaching team
 - The Hugging Face community for model hosting
 - Microsoft for ONNX Runtime WebGPU support
