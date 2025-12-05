@@ -1,5 +1,5 @@
 import * as ort from 'onnxruntime-web/webgpu';
-import { toBigInt64Array } from '../utils/common.js';
+import { toBigInt64Array } from '../util/common.js';
 import { randomNormalTensor, cat, ensureFloat32Array } from '../util/Tensor.js';
 import { PNDMScheduler } from '../scheduler/PNDMScheduler.js';
 import { AutoTokenizer, Tensor } from '@xenova/transformers';

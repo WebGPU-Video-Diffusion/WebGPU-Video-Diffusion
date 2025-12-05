@@ -3,7 +3,7 @@ import ort from 'onnxruntime-web/webgpu';
 //import { SDModel } from './models/sd.js';
 //import { SDModel } from './models/sd_t2img.js';
 import { SDModel } from './models/sd_t2v.js';
-import {draw_image} from './utils/common.js';
+import {draw_image} from './util/common.js';
 
 function log(i) { console.log(i); document.getElementById('status').innerText += `\n${i}`; }
 
