@@ -47,7 +47,7 @@ export class PNDMScheduler extends SchedulerBase {
         this.timesteps.slice([size - 1, size]),
       ]).reverse().clone();
       this.timesteps = this.plmsTimesteps;
-      log(`PNDM timesteps: ${this.timesteps.data}`);
+      //log(`PNDM timesteps: ${this.timesteps.data}`);
     } else {
       const prkTimesteps = this.timesteps.slice(-this.pndmOrder)
         .tile([2])

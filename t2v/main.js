@@ -32,7 +32,7 @@ function getConfig() {
         //model: "tlwu/stable-diffusion-v1-5-onnxruntime",
         model: "ykeee/StableDiffusion1.5-fp32",
         //local_model: "sd1.5/fp16",
-        local_model: "sd1.5/t2vnew-fp16-m",
+        local_model: "sd15-onnx-batch4",
         provider: "webgpu",
         device: "gpu",
         threads: "1",
@@ -65,10 +65,10 @@ const config = getConfig();
 
 const models = {
     "unet": {
-        url: "unet",
+        url: "unet_cross_frame_attn",
         externaldata: true,
         extfilename: 2, // 1 = model.onnx_data, 2 = weights.pb
-        local: true,
+        local: false,
     },
     "text_encoder": {
         url: "text_encoder",
