@@ -27290,7 +27290,13 @@ __webpack_require__.r(__webpack_exports__);
 
 onnxruntime_web_webgpu__WEBPACK_IMPORTED_MODULE_0__.env.wasm.numThreads = 1;
 onnxruntime_web_webgpu__WEBPACK_IMPORTED_MODULE_0__.env.wasm.simd = true;
-onnxruntime_web_webgpu__WEBPACK_IMPORTED_MODULE_0__.env.wasm.wasmPaths = document.location.pathname.replace('index.html', '') + 'dist/';
+
+// Fix wasmPaths for both local and GitHub Pages
+const basePath = document.location.pathname.endsWith('/') 
+    ? document.location.pathname 
+    : document.location.pathname.replace(/\/[^\/]*$/, '/');
+onnxruntime_web_webgpu__WEBPACK_IMPORTED_MODULE_0__.env.wasm.wasmPaths = basePath + 'dist/';
+console.log('wasmPaths:', onnxruntime_web_webgpu__WEBPACK_IMPORTED_MODULE_0__.env.wasm.wasmPaths);
 
 
 function log(i) { console.log(i); document.getElementById('status').innerText += `\n${i}`; }

@@ -10,97 +10,163 @@
 <script type="module" src="dist/main.js"></script>
 
 <head>
-    <title>WebGPU-Based Video Generation</title>
+    <title>WebGPU Video Diffusion - CIS 5650</title>
 </head>
 
 <style>
+    body {
+        background-color: #1a1a1a;
+    }
+    .header-section {
+        text-align: center;
+        padding: 20px 0;
+    }
     .onerow {
-        display: flex;
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+        max-width: 900px;
+        margin: 0 auto;
+    }
+    .frame-container {
+        border: 2px solid #444;
+        padding: 8px;
+        background: #2a2a2a;
+        border-radius: 8px;
+        text-align: center;
+    }
+    .frame-container canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: 4px;
+    }
+    .frame-label {
+        color: #aaa;
+        font-size: 0.85em;
+        margin-bottom: 5px;
+    }
+    #video_container {
+        max-width: 512px;
+        margin: 0 auto;
+    }
+    #video_container canvas {
+        border: 3px solid #555;
+        border-radius: 8px;
+    }
+    .video-section {
+        text-align: center;
+        margin-top: 20px;
+    }
+    .status-section {
+        background: #2a2a2a;
+        border-radius: 8px;
+        padding: 15px;
+        margin-top: 20px;
+        max-height: 200px;
+        overflow-y: auto;
+    }
+    #status {
+        font-family: 'Consolas', monospace;
+        font-size: 0.9em;
+        color: #8f8;
+        white-space: pre-wrap;
+    }
+    .contributor-link {
+        color: #6ea8fe;
+        text-decoration: none;
+    }
+    .contributor-link:hover {
+        text-decoration: underline;
     }
 </style>
 
 <body data-bs-theme="dark">
     <div class="container">
-        <div class="row pt-3">
-            <div class="col-md-9 col-12">
-                <h2>WebGPU-Based Video Generation</h2>
-            </div>
+        <!-- Header Section -->
+        <div class="header-section">
+            <h1 class="display-4">🎬 WebGPU Video Diffusion</h1>
+            <p class="lead text-muted">Text-to-Video Generation powered by WebGPU</p>
+            <p class="text-muted">
+                <strong>CIS 5650 Final Project</strong> · 
+                <a href="https://github.com/WebGPU-Video-Diffusion/WebGPU-Video-Diffusion" target="_blank" class="contributor-link">GitHub</a>
+            </p>
+            <p class="text-muted">
+                <a href="https://github.com/kytttt" target="_blank" class="contributor-link">@Yuntian Ke</a> · 
+                <a href="https://github.com/Pabloo0610" target="_blank" class="contributor-link">@Ruichi Zhang</a> · 
+                <a href="https://github.com/rmurdock41" target="_blank" class="contributor-link">@Muqiao Lei</a> · 
+                <a href="https://github.com/lobizhao" target="_blank" class="contributor-link">@Lobi Zhao</a>
+            </p>
+            <hr class="my-3">
         </div>
-        <div class="container p-2 card" id="input-area">
+
+        <!-- Input Section -->
+        <div class="container p-3 card mb-3" id="input-area">
             <div class="input-group">
-                <textarea class="form-control" id="user-input" placeholder="Type your question here..."></textarea>
-                <button id="send-button" class="btn btn-primary">Send</button>
+                <textarea class="form-control" id="user-input" rows="2" 
+                    placeholder="Describe the video you want to generate... (e.g., 'a cat walking on grass')"></textarea>
+                <button id="send-button" class="btn btn-primary btn-lg">🚀 Generate</button>
             </div>
         </div>
-        <div id="image_area">
-            <h5 style="margin-top: 10px; color: #aaa;">Generated Frames:</h5>
+
+        <!-- Video Preview Section -->
+        <div class="container p-3 card mb-3 video-section">
+            <h5><span style="color: #aaa;">📹 Video Preview</span></h5>
+            <div id="video_container" style="display: inline-block; background: #222; padding: 15px; border-radius: 8px; min-height: 100px;">
+                <p style="color: #666; margin: 30px;">Video will appear here after generation...</p>
+            </div>
+        </div>
+
+        <!-- Generated Frames Section -->
+        <div class="container p-3 card mb-3" id="image_area">
+            <h5 style="color: #aaa; margin-bottom: 15px;">🖼️ Generated Frames</h5>
             <div class="onerow">
-                <div id="img_div_0" style="margin-right: 4px;">
+                <div id="img_div_0" class="frame-container">
+                    <div class="frame-label">Frame 0</div>
                     <canvas id="img_canvas_0"></canvas>
                 </div>
-                <div id="img_div_1" style="margin-right: 4px;">
+                <div id="img_div_1" class="frame-container">
+                    <div class="frame-label">Frame 1</div>
                     <canvas id="img_canvas_1"></canvas>
                 </div>
-                <div id="img_div_2" style="margin-right: 4px;">
+                <div id="img_div_2" class="frame-container">
+                    <div class="frame-label">Frame 2</div>
                     <canvas id="img_canvas_2"></canvas>
                 </div>
-                <div id="img_div_3" style="margin-right: 4px;">
+                <div id="img_div_3" class="frame-container">
+                    <div class="frame-label">Frame 3</div>
                     <canvas id="img_canvas_3"></canvas>
                 </div>
             </div>
-            <div class="onerow" style="margin-top: 4px;">
-                <div id="img_div_4" style="margin-right: 4px;">
+            <div class="onerow" style="margin-top: 10px;">
+                <div id="img_div_4" class="frame-container">
+                    <div class="frame-label">Frame 4</div>
                     <canvas id="img_canvas_4"></canvas>
                 </div>
-                <div id="img_div_5" style="margin-right: 4px;">
+                <div id="img_div_5" class="frame-container">
+                    <div class="frame-label">Frame 5</div>
                     <canvas id="img_canvas_5"></canvas>
                 </div>
-                <div id="img_div_6" style="margin-right: 4px;">
+                <div id="img_div_6" class="frame-container">
+                    <div class="frame-label">Frame 6</div>
                     <canvas id="img_canvas_6"></canvas>
                 </div>
-                <div id="img_div_7" style="margin-right: 4px;">
+                <div id="img_div_7" class="frame-container">
+                    <div class="frame-label">Frame 7</div>
                     <canvas id="img_canvas_7"></canvas>
                 </div>
             </div>
-            <div class="onerow" style="margin-top: 4px;">
-                <div id="img_div_8" style="margin-right: 4px;">
-                    <canvas id="img_canvas_8"></canvas>
-                </div>
-                <div id="img_div_9" style="margin-right: 4px;">
-                    <canvas id="img_canvas_9"></canvas>
-                </div>
-                <div id="img_div_10" style="margin-right: 4px;">
-                    <canvas id="img_canvas_10"></canvas>
-                </div>
-                <div id="img_div_11" style="margin-right: 4px;">
-                    <canvas id="img_canvas_11"></canvas>
-                </div>
-            </div>
-            <div class="onerow" style="margin-top: 4px;">
-                <div id="img_div_12" style="margin-right: 4px;">
-                    <canvas id="img_canvas_12"></canvas>
-                </div>
-                <div id="img_div_13" style="margin-right: 4px;">
-                    <canvas id="img_canvas_13"></canvas>
-                </div>
-                <div id="img_div_14" style="margin-right: 4px;">
-                    <canvas id="img_canvas_14"></canvas>
-                </div>
-                <div id="img_div_15" style="margin-right: 4px;">
-                    <canvas id="img_canvas_15"></canvas>
-                </div>
-            </div>
         </div>
-        
-        <div id="video_area" style="margin-top: 20px;">
-            <h5 style="color: #aaa;">Generated Video:</h5>
-            <div id="video_container" style="display: inline-block; background: #222; padding: 10px; border-radius: 8px;">
-                <p style="color: #666; margin: 20px;">Video will appear here after frames are generated...</p>
-            </div>
+
+        <!-- Status Section -->
+        <div class="container p-3 card status-section">
+            <h6 style="color: #aaa; margin-bottom: 10px;">📊 Status Log</h6>
+            <div id="status"></div>
         </div>
-        <p class="text-lg-start">
-        <div id="status" style="font: 1em consolas;"></div>
-        </p>
+
+        <footer class="text-center text-muted py-4">
+            <small>Powered by Stable Diffusion 1.5 + Text-to-Video Zero | WebGPU + ONNX Runtime</small>
+        </footer>
     </div>
 </body>
 
