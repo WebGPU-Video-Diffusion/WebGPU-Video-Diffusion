@@ -2,11 +2,28 @@
 
 ### Text-to-Video Generation Powered by WebGPU
 
-<p align="center">
-  <img src="images/skiing.gif" alt="Demo: Skiing Animation" width="512">
-  <br>
-  <em>Example output: "A person skiing down a snowy mountain"</em>
-</p>
+<table align="center">
+  <tr>
+    <td align="center">
+      <img src="images/superman.gif" alt="Demo: Skiing" width="256"><br>
+      <em>"Superman is flying in the sky"</em>
+    </td>
+    <td align="center">
+      <img src="images/rocket.gif" alt="Demo 2" width="256"><br>
+      <em>"A rocket is been launched"</em>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="images/skiing.gif" alt="Demo 3" width="256"><br>
+      <em>"A man is skiing"</em>
+    </td>
+    <td align="center">
+      <img src="images/jellyfish.gif" alt="Demo 4" width="256"><br>
+      <em>"A jellyfish moves in the sea"</em>
+    </td>
+  </tr>
+</table>
 
 [![WebGPU](https://img.shields.io/badge/WebGPU-Enabled-blue)](https://developer.mozilla.org/en-US/docs/Web/API/WebGPU_API)
 [![ONNX Runtime](https://img.shields.io/badge/ONNX-Runtime-orange)](https://onnxruntime.ai/)
@@ -113,7 +130,7 @@ npm run dev
 1. Open `http://localhost:8081` in your browser
 2. Enter a text prompt (e.g., "a cat walking on grass")
 3. Click "Generate" and wait for the video to be created
-4. Download the result as GIF or video
+4. Download the result as video and frames
 
 ---
 
@@ -150,7 +167,7 @@ num_inference_steps: 50,      // Total diffusion steps
 | Video Generation (8 frames) | 8-10 minutes |
 | VAE Decoding | ~500ms per frame |
 
-*Tested on NVIDIA RTX 5070Ti, performance varies by GPU*
+*Tested on NVIDIA RTX 5070Ti laptop, performance varies by GPU*
 
 ---
 
