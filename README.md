@@ -1,4 +1,4 @@
-#  WebGPU Video Diffusion
+#  WebT2V
 
 ### Text-to-Video Generation Powered by WebGPU
 
@@ -10,7 +10,7 @@
     </td>
     <td align="center">
       <img src="images/rocket.gif" alt="Demo 2" width="256"><br>
-      <em>"A rocket is been launched"</em>
+      <em>"A rocket is being launched"</em>
     </td>
   </tr>
   <tr>
@@ -62,12 +62,9 @@ This project implements **Text-to-Video Zero** - a zero-shot text-to-video gener
 ##  Technical Architecture
 
 ### Pipeline Overview
-
-```
-Text Prompt  Text Encoder  Cross-Frame UNet  VAE Decoder  Video Frames
-                    
-              CLIP Tokenizer
-```
+<p align="center">
+  <img src="images/pipeline.png" width="700">
+</p>
 
 ### Text-to-Video Zero Algorithm
 
